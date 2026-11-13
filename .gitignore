@@ -1,0 +1,24 @@
+# Godot 4 generated cache
+.godot/
+
+# Godot export credentials
+export_credentials.cfg
+
+# Exported builds
+/builds/
+/exports/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
