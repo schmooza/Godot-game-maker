@@ -50,6 +50,11 @@ func _build_foundation_ui() -> void:
 	board_picker.item_selected.connect(_select_board)
 	content.add_child(board_picker)
 
+	var play_button := Button.new()
+	play_button.text = "Play Adventure (Phase 2)"
+	play_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/adventure.tscn"))
+	content.add_child(play_button)
+
 	var panel := PanelContainer.new()
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_child(panel)
