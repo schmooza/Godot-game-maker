@@ -1,0 +1,1 @@
+Adventure item HP change: positive numbers heal, negative numbers cause damage, zero does nothing. HP is capped at Starting HP and cannot fall below zero. Existing legacy damage values are interpreted as negative HP changes, so older saves keep their damage effects. Item sound and action behaviours are unchanged.

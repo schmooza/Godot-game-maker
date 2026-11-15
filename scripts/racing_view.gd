@@ -13,6 +13,36 @@ func _draw() -> void:
 		draw_circle(p, c.road_width * 0.5, Color("#666666"))
 	for p in c.track_points:
 		draw_circle(p, 1.0, Color("#eaeaea"))
+	if c.water_hazards != null:
+		for mark in c.water_hazards.marks:
+			var pos := Vector2(float(mark["x"]), float(mark["y"]))
+			var radius := float(mark["width"]) * 0.5
+			var end_pos := Vector2(float(mark.get("x2", mark["x"])), float(mark.get("y2", mark["y"])))
+			var tint := Color("#666666") if mark["erase"] else Color("#42b9e8")
+			draw_line(pos, end_pos, tint, radius * 2.0, true)
+			draw_circle(pos, radius, tint)
+			draw_circle(end_pos, radius, tint)
+	if c.spike_hazards != null:
+		var extended: bool = c.spike_hazards.extended()
+		for mark in c.spike_hazards.marks:
+			var pos := Vector2(float(mark["x"]), float(mark["y"]))
+			var end_pos := Vector2(float(mark.get("x2", mark["x"])), float(mark.get("y2", mark["y"])))
+			var width: float = float(mark["width"])
+			var tint := Color("#666666") if bool(mark["erase"]) else (Color("#dc4444") if extended else Color("#9b9292"))
+			draw_line(pos, end_pos, tint, width, true)
+			draw_circle(pos, width * 0.5, tint)
+			draw_circle(end_pos, width * 0.5, tint)
+			if not bool(mark["erase"]) and extended:
+				var distance: float = pos.distance_to(end_pos)
+				var steps: int = maxi(1, int(distance / 16.0))
+				var direction: Vector2 = (end_pos - pos).normalized()
+				var normal: Vector2 = direction.orthogonal()
+				for i in range(steps + 1):
+					var center: Vector2 = pos.lerp(end_pos, float(i) / float(steps))
+					var triangle := PackedVector2Array([center - normal * 7.0, center + normal * 7.0, center + direction * 9.0])
+					draw_colored_polygon(triangle, Color("#ffe1a0"))
+	if c.paint_mode != "none" and c.pending_draw_point.x >= 0.0:
+		draw_circle(c.pending_draw_point, 6.0, Color("#ffcc33"))
 	if not c.race_mode:
 		if not c.track_points.is_empty():
 			var start: Vector2 = c._start_position()
@@ -46,13 +76,26 @@ func _draw() -> void:
 			draw_circle(target, 7.0, Color("#f5c542"))
 			draw_string(ThemeDB.fallback_font, target + Vector2(10, -10), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Color.BLACK)
 
-func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+# Simple point-to-point editor: one click sets A, the next sets B.
+# Mouse dragging is deliberately disabled.
+func _input(event: InputEvent) -> void:
+	if controller == null or not is_visible_in_tree():
+		return
+	if not (event is InputEventMouseButton):
+		return
+	var factor: float = minf(size.x / 900.0, size.y / 560.0)
+	if factor <= 0.0:
+		return
+	var local_pos: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
+	var inside := Rect2(Vector2.ZERO, size).has_point(local_pos)
+	if controller.paint_mode != "none" and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and inside:
+		controller._paint_at(local_pos / factor)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and inside:
 		if controller.placing_checkpoints or controller.placing_start:
-			var factor: float = minf(size.x / 900.0, size.y / 560.0)
-			if factor > 0.0:
-				if controller.placing_start:
-					controller._set_start_at(event.position / factor)
-				else:
-					controller._add_checkpoint_at(event.position / factor)
-			accept_event()
+			if controller.placing_start:
+				controller._set_start_at(local_pos / factor)
+			else:
+				controller._add_checkpoint_at(local_pos / factor)
+			get_viewport().set_input_as_handled()

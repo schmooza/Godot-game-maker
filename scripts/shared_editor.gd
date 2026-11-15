@@ -342,10 +342,10 @@ func _build() -> void:
 	password_edit.text_changed.connect(func(_v: String): _apply_properties())
 	left.add_child(password_edit)
 	var damage_label := Label.new()
-	damage_label.text = "Damage on click (Adventure, 0 = harmless)"
+	damage_label.text = "HP change on click (+ heals, - damages, 0 = none)"
 	left.add_child(damage_label)
 	damage_edit = SpinBox.new()
-	damage_edit.min_value = 0
+	damage_edit.min_value = -100
 	damage_edit.max_value = 100
 	damage_edit.step = 1
 	damage_edit.value_changed.connect(func(_value: float): _apply_properties())
@@ -805,7 +805,7 @@ func _select(index: int) -> void:
 	required_edit.text = str(o.get("required", ""))
 	password_edit.text = str(o.get("password", ""))
 	wrong_edit.text = str(o.get("wrong_message", "Incorrect password. Try again."))
-	damage_edit.value = int(o.get("damage", 0))
+	damage_edit.value = int(o.get("hp_change", -int(o.get("damage", 0))))
 	damage_message_edit.text = str(o.get("damage_message", ""))
 	hidden_edit.button_pressed = bool(o.get("hidden", false))
 	for widget in [label_edit, x_edit, y_edit, w_edit, h_edit, action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker]:
@@ -827,7 +827,8 @@ func _apply_properties() -> void:
 	o["required"] = required_edit.text
 	o["password"] = password_edit.text
 	o["wrong_message"] = wrong_edit.text
-	o["damage"] = int(damage_edit.value)
+	o["hp_change"] = int(damage_edit.value)
+	o["damage"] = 0 # Legacy field retained for older saves
 	o["damage_message"] = damage_message_edit.text
 	o["hidden"] = hidden_edit.button_pressed
 	# Do not rebuild the editor while a LineEdit has keyboard focus.
@@ -959,7 +960,14 @@ func _interact(id: String) -> void:
 	_play_item_sound(obj)
 	play_highlight_id = id
 	_refresh_object_highlights()
-	var damage := maxi(0, int(obj.get("damage", 0)))
+	var hp_change := int(obj.get("hp_change", -int(obj.get("damage", 0))))
+	var damage := maxi(0, -hp_change)
+	var healed := 0
+	if hp_change > 0:
+		var previous_hp := current_hp
+		current_hp = mini(_starting_hp(), current_hp + hp_change)
+		healed = current_hp - previous_hp
+		_update_hp_label()
 	var damage_explanation := str(obj.get("damage_message", "")).strip_edges()
 	if damage > 0 and damage_explanation.is_empty():
 		damage_explanation = "The " + str(obj.get("label", "object")) + " hurt you!"
@@ -1045,6 +1053,8 @@ func _interact(id: String) -> void:
 				status.text += "  YOU WIN!"
 	if damage > 0:
 		status.text = damage_explanation + "  (-" + str(damage) + " HP)\n" + status.text
+	elif hp_change > 0:
+		status.text = ("Healed +" + str(healed) + " HP" if healed > 0 else "HP already full") + " (" + str(current_hp) + "/" + str(_starting_hp()) + ")\n" + status.text
 	var result_message := status.text
 	_rebuild()
 	status.text = result_message

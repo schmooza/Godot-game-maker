@@ -17,6 +17,18 @@ var track_texture: Texture2D
 var scenery_texture: Texture2D
 const SCENERY_PATH := "user://racing_scenery.png"
 var car_texture: Texture2D
+var flying_car_texture: Texture2D
+var flying_dialog: FileDialog
+var track_painter: Node
+var water_hazards: Node
+var spike_hazards: Node
+var car_jump: Node
+var checkpoint_respawn: Node
+var paint_mode := "none"
+var pending_draw_point := Vector2(-1.0, -1.0)
+var paint_brush := 28.0
+var paint_brush_spin: SpinBox
+const FLYING_SPRITE_PATH := "user://racing_flying_car.png"
 var car_sprite_width := 42.0
 var car_size_spin: SpinBox
 var car_front_direction := 0 # 0=Top, 1=Bottom, 2=Left, 3=Right
@@ -40,6 +52,7 @@ var elapsed := 0.0
 var timer_started := false
 var lap_start := 0.0
 var best_lap := INF
+var lap_record := INF
 var checkpoints := [false, false, false]
 var last_progress := 0.0
 var last_checkpoint := -1
@@ -73,6 +86,7 @@ var status: Label
 var timer_label: Label
 var map_hud_label: Label
 var score_label: Label
+var last_race_time := -1.0
 var dialog: FileDialog
 var car_dialog: FileDialog
 var scenery_dialog: FileDialog
@@ -82,6 +96,7 @@ var track_file := "user://racing_track.png"
 
 func _ready() -> void:
 	_build()
+	_install_racing_modules()
 	_install_editable_tooltips()
 	_install_optional_audio()
 	_install_game_intro()
@@ -89,6 +104,7 @@ func _ready() -> void:
 	_load_track()
 	_load_scores()
 	_load_car_sprite()
+	_load_flying_car_sprite()
 	_update_car_front_preview()
 	_load_scenery()
 	_update_status()
@@ -140,6 +156,7 @@ func _build() -> void:
 	_button(toolbar, "← Games", func(): get_tree().change_scene_to_file("res://scenes/main.tscn"))
 	_button(toolbar, "Import black-line track", _open_track_dialog)
 	_button(toolbar, "Import car sprite", _open_car_dialog)
+	_button(toolbar, "Import flying car", _open_flying_dialog)
 	_button(toolbar, "Import scenery", _open_scenery_dialog)
 	_button(toolbar, "Edit Track", _edit_track)
 	_button(toolbar, "Play / Test", _start)
@@ -164,6 +181,68 @@ func _build() -> void:
 	track_selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	track_selector.item_selected.connect(_select_track)
 	scene_panel.add_child(track_selector)
+	var painter_section := _section(sidebar, "DRAW TRACK & HAZARDS", Color("#52bde2"))
+	_button(painter_section, "Road: Point to Point", func(): _set_paint_mode("road"))
+	_button(painter_section, "Water: Point to Point", func(): _set_paint_mode("water"))
+	_button(painter_section, "Spikes: Point to Point", func(): _set_paint_mode("spikes"))
+	_button(painter_section, "Erase Spikes (click A then B)", func(): _set_paint_mode("erase_spikes"))
+	var spike_up_label := Label.new()
+	spike_up_label.text = "Spikes UP duration (seconds)"
+	painter_section.add_child(spike_up_label)
+	var spike_up_spin := SpinBox.new()
+	spike_up_spin.min_value = 0.1
+	spike_up_spin.max_value = 30.0
+	spike_up_spin.step = 0.1
+	spike_up_spin.value = 2.0
+	spike_up_spin.name = "SpikeUpDuration"
+	painter_section.add_child(spike_up_spin)
+	var spike_down_label := Label.new()
+	spike_down_label.text = "Spikes DOWN duration (seconds)"
+	painter_section.add_child(spike_down_label)
+	var spike_down_spin := SpinBox.new()
+	spike_down_spin.min_value = 0.1
+	spike_down_spin.max_value = 30.0
+	spike_down_spin.step = 0.1
+	spike_down_spin.value = 3.0
+	spike_down_spin.name = "SpikeDownDuration"
+	painter_section.add_child(spike_down_spin)
+	spike_up_spin.value_changed.connect(func(v: float):
+		if spike_hazards != null:
+			spike_hazards.set_timing(v, spike_down_spin.value)
+			_save_drawing()
+	)
+	spike_down_spin.value_changed.connect(func(v: float):
+		if spike_hazards != null:
+			spike_hazards.set_timing(spike_up_spin.value, v)
+			_save_drawing()
+	)
+	var preview_spikes := CheckBox.new()
+	preview_spikes.text = "Preview spike animation in editor"
+	preview_spikes.button_pressed = true
+	preview_spikes.name = "SpikePreview"
+	painter_section.add_child(preview_spikes)
+	preview_spikes.toggled.connect(func(enabled: bool):
+		if spike_hazards != null:
+			spike_hazards.preview_enabled = enabled
+	)
+
+	_button(painter_section, "Erase Road (click A then B)", func(): _set_paint_mode("erase_road"))
+	_button(painter_section, "Erase Water (click A then B)", func(): _set_paint_mode("erase_water"))
+	_button(painter_section, "Stop Drawing", func(): _set_paint_mode("none"))
+	paint_brush_spin = SpinBox.new()
+	paint_brush_spin.min_value = 8
+	paint_brush_spin.max_value = 110
+	paint_brush_spin.value = paint_brush
+	paint_brush_spin.value_changed.connect(func(v: float): paint_brush = v)
+	painter_section.add_child(paint_brush_spin)
+	_button(painter_section, "Undo Drawing", _undo_paint)
+	_button(painter_section, "Redo Drawing", _redo_paint)
+	_button(painter_section, "New Blank Track", _new_blank_track)
+	_button(painter_section, "Save Drawing", _save_drawing)
+	var jump_hint := Label.new()
+	jump_hint.text = "SPACE = jump over water or raised spikes. Set spike up/down durations above. Hitting raised spikes returns you to the last checkpoint. Import a flying car PNG to change its image in mid-air."
+	jump_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	painter_section.add_child(jump_hint)
 	var instructions := Label.new()
 	instructions.text = "Draw ONE continuous closed black line on white.\nSave as PNG and import it.\nUse WASD to drive.\nStay on the generated road."
 	instructions.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -375,6 +454,13 @@ func _build() -> void:
 	dialog.add_filter("*.png", "PNG track")
 	dialog.file_selected.connect(_import_track)
 	add_child(dialog)
+	flying_dialog = FileDialog.new()
+	flying_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	flying_dialog.use_native_dialog = true
+	flying_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	flying_dialog.add_filter("*.png", "Flying car PNG")
+	flying_dialog.file_selected.connect(_import_flying_car_sprite)
+	add_child(flying_dialog)
 	car_dialog = FileDialog.new()
 	car_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	car_dialog.use_native_dialog = true
@@ -417,6 +503,29 @@ func _load_scenery() -> void:
 	if image.load(_scenery_path()) == OK:
 		scenery_texture = ImageTexture.create_from_image(image)
 		track_view.queue_redraw()
+
+func _open_flying_dialog() -> void:
+	flying_dialog.popup_centered_ratio(0.75)
+
+func _import_flying_car_sprite(path: String) -> void:
+	var img := Image.new()
+	if img.load(path) != OK:
+		status.text = "Could not load flying car PNG."
+		return
+	img.convert(Image.FORMAT_RGBA8)
+	var used := img.get_used_rect()
+	if used.size.x > 0 and used.size.y > 0:
+		img = img.get_region(used)
+	if img.save_png(FLYING_SPRITE_PATH) == OK:
+		flying_car_texture = ImageTexture.create_from_image(img)
+		status.text = "Flying car image saved. It appears while jumping."
+		car_view.queue_redraw()
+
+func _load_flying_car_sprite() -> void:
+	if FileAccess.file_exists(FLYING_SPRITE_PATH):
+		var img := Image.new()
+		if img.load(FLYING_SPRITE_PATH) == OK:
+			flying_car_texture = ImageTexture.create_from_image(img)
 
 func _open_car_dialog() -> void:
 	car_dialog.popup_centered_ratio(0.75)
@@ -529,6 +638,10 @@ func _import_track(path: String) -> void:
 		status.text = "Could not save imported track."
 		return
 	var track_name := path.get_file().get_basename()
+	track_painter.clear_data()
+	water_hazards.clear_data()
+	spike_hazards.clear_data()
+	_save_drawing()
 	track_library.append({"id": active_track_id, "name": track_name})
 	_save_track_library()
 	_refresh_track_selector()
@@ -658,6 +771,8 @@ func _select_track(index: int) -> void:
 			track_points = _extract_line(img)
 			_build_road_cells()
 	_load_scenery()
+	_load_drawing_layers()
+	_refresh_painted_road()
 	_load_scores()
 	_reset_car()
 	_update_status()
@@ -773,11 +888,140 @@ func _start() -> void:
 	else:
 		_start_actual()
 
+func _install_racing_modules() -> void:
+	track_painter = load("res://scripts/track_painter.gd").new()
+	water_hazards = load("res://scripts/water_hazards.gd").new()
+	spike_hazards = load("res://scripts/spike_hazards.gd").new()
+	car_jump = load("res://scripts/car_jump.gd").new()
+	checkpoint_respawn = load("res://scripts/checkpoint_respawn.gd").new()
+	for module in [track_painter, water_hazards, spike_hazards, car_jump, checkpoint_respawn]:
+		add_child(module)
+	_load_drawing_layers()
+
+func _drawing_base() -> String:
+	return TRACKS_DIR + "/" + active_track_id
+
+func _load_drawing_layers() -> void:
+	track_painter.load_data(_drawing_base() + "_road.json")
+	water_hazards.load_data(_drawing_base() + "_water.json")
+	spike_hazards.load_data(_drawing_base() + "_spikes.json")
+	var up_control: SpinBox = find_child("SpikeUpDuration", true, false)
+	var down_control: SpinBox = find_child("SpikeDownDuration", true, false)
+	if up_control != null:
+		up_control.set_value_no_signal(spike_hazards.up_seconds)
+	if down_control != null:
+		down_control.set_value_no_signal(spike_hazards.down_seconds)
+
+	if track_view != null:
+		track_view.queue_redraw()
+
+func _save_drawing() -> void:
+	DirAccess.make_dir_recursive_absolute(TRACKS_DIR)
+	track_painter.save_data(_drawing_base() + "_road.json")
+	water_hazards.save_data(_drawing_base() + "_water.json")
+	spike_hazards.save_data(_drawing_base() + "_spikes.json")
+	status.text = "Road and hazard drawing saved."
+
+func _set_paint_mode(mode: String) -> void:
+	paint_mode = mode
+	pending_draw_point = Vector2(-1.0, -1.0)
+	playing = false
+	race_mode = false
+	placing_checkpoints = false
+	placing_start = false
+	status.text = "Drawing: " + mode + " — click point A, then point B. Continue clicking to extend."
+	track_view.queue_redraw()
+
+func _paint_at(pos: Vector2) -> void:
+	if paint_mode == "none":
+		return
+	pos = pos.clamp(Vector2.ZERO, CANVAS)
+	if pending_draw_point.x < 0.0:
+		pending_draw_point = pos
+		status.text = "Point A set. Click point B to draw a segment."
+		track_view.queue_redraw()
+		return
+	var from_point: Vector2 = pending_draw_point
+	if from_point.distance_to(pos) < 2.0:
+		return
+	if paint_mode == "road" or paint_mode == "erase_road":
+		track_painter.paint_segment(from_point, pos, paint_brush, paint_mode == "erase_road")
+		track_points = track_painter.combined_points(_base_road_points())
+		_build_road_cells()
+	elif paint_mode == "water" or paint_mode == "erase_water":
+		water_hazards.paint_segment(from_point, pos, paint_brush, paint_mode == "erase_water")
+	else:
+		spike_hazards.paint_segment(from_point, pos, paint_brush, paint_mode == "erase_spikes")
+	pending_draw_point = pos
+	_save_drawing()
+	status.text = "Segment added. Click next point to extend, or Stop Drawing."
+	track_view.queue_redraw()
+
+func _finish_paint() -> void:
+	_save_drawing()
+
+func _undo_paint() -> void:
+	pending_draw_point = Vector2(-1.0, -1.0)
+	if paint_mode == "water" or paint_mode == "erase_water":
+		water_hazards.undo()
+	elif paint_mode == "spikes" or paint_mode == "erase_spikes":
+		spike_hazards.undo()
+	else:
+		track_painter.undo()
+	_refresh_painted_road()
+
+func _redo_paint() -> void:
+	pending_draw_point = Vector2(-1.0, -1.0)
+	if paint_mode == "water" or paint_mode == "erase_water":
+		water_hazards.redo()
+	elif paint_mode == "spikes" or paint_mode == "erase_spikes":
+		spike_hazards.redo()
+	else:
+		track_painter.redo()
+	_refresh_painted_road()
+
+func _base_road_points() -> Array[Vector2]:
+	if track_image != null:
+		return _extract_line(track_image)
+	return [] as Array[Vector2]
+
+func _refresh_painted_road() -> void:
+	track_points = track_painter.combined_points(_base_road_points())
+	_build_road_cells()
+	_save_drawing()
+	track_view.queue_redraw()
+
+func _new_blank_track() -> void:
+	DirAccess.make_dir_recursive_absolute(TRACKS_DIR)
+	active_track_id = str(Time.get_ticks_usec())
+	track_file = TRACKS_DIR + "/" + active_track_id + ".png"
+	track_image = null
+	track_texture = null
+	track_points.clear()
+	road_cells.clear()
+	track_painter.clear_data()
+	water_hazards.clear_data()
+	spike_hazards.clear_data()
+	track_library.append({"id": active_track_id, "name": "Drawn Track " + active_track_id})
+	_save_track_library()
+	_refresh_track_selector()
+	custom_checkpoints.clear()
+	custom_start_position = Vector2(-1, -1)
+	_save_drawing()
+	_load_scores()
+	_reset_car()
+	_set_paint_mode("road")
+	status.text = "New track. Click points to draw road segments, then place checkpoints."
+
 func _start_actual() -> void:
-	if track_points.size() < 100:
-		status.text = "Import a black-line track first."
+	# Exit drawing mode before racing so the map receives game input.
+	paint_mode = "none"
+	pending_draw_point = Vector2(-1.0, -1.0)
+	if track_points.size() < 2:
+		status.text = "Draw a road or import a black-line track before racing."
 		return
 	_reset_car()
+	car_jump.reset()
 	playing = true
 	_sound("Background Music")
 	race_mode = true
@@ -802,6 +1046,7 @@ func _start_actual() -> void:
 	checkpoints.resize(checkpoint_targets.size())
 	checkpoints.fill(false)
 	last_checkpoint = -1
+	checkpoint_respawn.remember(_nearest_road_point(_start_position()), car_angle)
 	# The old automatic bounds checkpoints are no longer used.
 	var bounds := Rect2(track_points[0], Vector2.ZERO)
 	for point in track_points:
@@ -833,7 +1078,24 @@ func _on_road(p: Vector2) -> bool:
 						return true
 	return false
 
+func _nearest_road_point(pos: Vector2) -> Vector2:
+	# Checkpoints can be placed just outside the painted road. Respawn safely on it.
+	if _on_road(pos) or track_points.is_empty():
+		return pos
+	var closest: Vector2 = track_points[0]
+	var best_distance := closest.distance_squared_to(pos)
+	for point in track_points:
+		var distance := point.distance_squared_to(pos)
+		if distance < best_distance:
+			best_distance = distance
+			closest = point
+	return closest
+
 func _process(delta: float) -> void:
+	if spike_hazards != null:
+		spike_hazards.tick(delta)
+		if track_view != null:
+			track_view.queue_redraw()
 	if not playing:
 		return
 	# WASD-only controls; physical keys avoid focused UI widgets consuming input.
@@ -860,14 +1122,31 @@ func _process(delta: float) -> void:
 		car_speed = move_toward(car_speed, 0.0, coast_drag * delta)
 	if abs(car_speed) > 5:
 		car_angle += steer * 2.4 * delta * sign(car_speed)
+	var was_airborne: bool = car_jump.airborne()
+	car_jump.tick(delta, Input.is_physical_key_pressed(KEY_SPACE))
 	var next := car_position + Vector2.UP.rotated(car_angle) * car_speed * delta
-	if _on_road(next):
+	# On landing, the car must be back on a road and clear of water.
+	# Otherwise it respawns rather than becoming stranded off-track.
+	if was_airborne and not car_jump.airborne() and (not _on_road(next) or (water_hazards.contains(next) or spike_hazards.danger_at(next))):
+		checkpoint_respawn.respawn(self)
+		_update_status()
+		car_view.queue_redraw()
+		return
+	if (water_hazards.contains(next) or spike_hazards.danger_at(next)) and not car_jump.airborne():
+		checkpoint_respawn.respawn(self)
+		_update_status()
+		car_view.queue_redraw()
+		return
+	if _on_road(next) or car_jump.airborne():
 		# Start the clock only after the car actually moves on the road.
 		if not timer_started and next.distance_squared_to(car_position) > 0.000001:
 			timer_started = true
 		car_position = next
 	else:
-		car_speed = 0.0
+		if not _on_road(car_position):
+			checkpoint_respawn.respawn(self)
+		else:
+			car_speed = 0.0
 	if timer_started:
 		elapsed += delta
 		_check_lap()
@@ -885,14 +1164,19 @@ func _check_lap() -> void:
 			checkpoints[i] = true
 			_sound("Checkpoint")
 			last_checkpoint = i
+			checkpoint_respawn.remember(_nearest_road_point(targets[i]), car_angle)
 	if last_checkpoint == targets.size() - 1 and car_position.distance_to(_start_position()) < lap_sensor_radius:
 		var lap_time := elapsed - lap_start
 		if lap_time > 2.0:
 			best_lap = min(best_lap, lap_time)
+			if lap_time < lap_record:
+				lap_record = lap_time
+				_save_lap_record()
 			lap += 1
 			_sound("Lap Complete")
 			lap_start = elapsed
 			last_checkpoint = -1
+			checkpoint_respawn.remember(_nearest_road_point(_start_position()), car_angle)
 			checkpoints.fill(false)
 			if lap >= total_laps:
 				if optional_audio != null:
@@ -901,6 +1185,7 @@ func _check_lap() -> void:
 				playing = false
 				_record_score(elapsed)
 				_update_score_label()
+				_update_status()
 				status.text = "RACE COMPLETE! Time: " + _fmt(elapsed)
 
 
@@ -909,6 +1194,8 @@ func _update_start_button() -> void:
 		start_toggle_button.text = "STOP setting start (click again)" if placing_start else "SET start position (click road)"
 
 func _toggle_start_placement() -> void:
+	paint_mode = "none"
+	pending_draw_point = Vector2(-1.0, -1.0)
 	if track_points.is_empty():
 		status.text = "Import a track before setting its start."
 		return
@@ -1011,6 +1298,8 @@ func _update_checkpoint_info() -> void:
 		checkpoint_toggle_button.text = "STOP placing checkpoints (click again)" if placing_checkpoints else "START placing checkpoints"
 
 func _begin_checkpoint_placement() -> void:
+	paint_mode = "none"
+	pending_draw_point = Vector2(-1.0, -1.0)
 	if track_points.is_empty():
 		status.text = "Import a track before placing checkpoints."
 		return
@@ -1115,27 +1404,31 @@ func _fmt(seconds: float) -> String:
 func _update_status() -> void:
 	if timer_label == null:
 		return
-	timer_label.text = "Lap: %d / %d\nCurrent: %s\nBest lap: %s" % [lap, total_laps, _fmt(elapsed - lap_start), "—" if is_inf(best_lap) else _fmt(best_lap)]
+	timer_label.text = "Lap: %d / %d\nCurrent: %s\nBest lap this race: %s\nLAP RECORD: %s" % [lap, total_laps, _fmt(elapsed - lap_start), "—" if is_inf(best_lap) else _fmt(best_lap), "—" if is_inf(lap_record) else _fmt(lap_record)]
 	if map_hud_label != null:
 		var shown_lap: int = mini(lap + 1, total_laps)
 		var current_time: float = maxf(0.0, elapsed - lap_start)
+		if not playing and lap >= total_laps and last_race_time >= 0.0:
+			current_time = last_race_time
 		var record_text := "--:--" if scores.is_empty() else _fmt(float(scores[0]))
 		var next_checkpoint_text := "FINISH" if last_checkpoint >= custom_checkpoints.size() - 1 else str(last_checkpoint + 2)
 		if last_checkpoint < 0:
 			next_checkpoint_text = "1"
-		map_hud_label.text = "LAP  %d / %d\nTIME  %s\nBEST LAP  %s\nRECORD  %s\nSPEED  %d px/s\nNEXT  %s" % [shown_lap, total_laps, _fmt(current_time), "--:--" if is_inf(best_lap) else _fmt(best_lap), record_text, int(round(absf(car_speed))), next_checkpoint_text]
+		map_hud_label.text = "LAP  %d / %d\nTIME  %s\nLAP RECORD  %s\n3 LAP TOTAL RECORD  %s\nSPEED  %d px/s\nNEXT  %s" % [shown_lap, total_laps, _fmt(current_time), "--:--" if is_inf(lap_record) else _fmt(lap_record), record_text, int(round(absf(car_speed))), next_checkpoint_text]
 
 	if not playing:
 		_update_score_label()
 
 func _update_score_label() -> void:
 	var record_text := "--:--" if scores.is_empty() else _fmt(float(scores[0]))
-	var rows := "BEST RACE RECORD: %s\nTOP 10 RACE TIMES\n" % record_text
+	var last_text := "--:--" if last_race_time < 0.0 else _fmt(last_race_time)
+	var rows := "LAP RECORD: %s\nLAST RACE: %s\n3 LAP TOTAL RECORD: %s\nTOP 10 RACE TIMES\n" % ["—" if is_inf(lap_record) else _fmt(lap_record), last_text, record_text]
 	for i in range(min(10, scores.size())):
 		rows += "%d. %s\n" % [i + 1, _fmt(float(scores[i]))]
 	score_label.text = rows
 
 func _record_score(time: float) -> void:
+	last_race_time = time
 	scores.append(time)
 	scores.sort()
 	if scores.size() > 10:
@@ -1143,14 +1436,36 @@ func _record_score(time: float) -> void:
 	var f := FileAccess.open(_score_path(), FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(scores))
+		f.close()
+	var last_file := FileAccess.open(_score_path() + ".last", FileAccess.WRITE)
+	if last_file != null:
+		last_file.store_string(str(time))
+		last_file.close()
 
 func _score_path() -> String:
 	if active_track_id.is_empty():
 		return SCORE_PATH
 	return TRACKS_DIR + "/" + active_track_id + "_scores.json"
 
+func _lap_record_path() -> String:
+	return _score_path() + ".lap"
+
+func _save_lap_record() -> void:
+	var file := FileAccess.open(_lap_record_path(), FileAccess.WRITE)
+	if file != null:
+		file.store_string(str(lap_record))
+		file.close()
+
 func _load_scores() -> void:
+	lap_record = INF
+	if FileAccess.file_exists(_lap_record_path()):
+		var stored := FileAccess.get_file_as_string(_lap_record_path()).to_float()
+		if stored > 0.0:
+			lap_record = stored
 	scores = []
+	last_race_time = -1.0
+	if FileAccess.file_exists(_score_path() + ".last"):
+		last_race_time = FileAccess.get_file_as_string(_score_path() + ".last").to_float()
 	var path := _score_path()
 	if active_track_id == "original" and not FileAccess.file_exists(path) and FileAccess.file_exists(SCORE_PATH):
 		DirAccess.copy_absolute(SCORE_PATH, path)
