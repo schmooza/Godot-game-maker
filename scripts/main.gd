@@ -28,4 +28,4 @@ func _ready() -> void:
 
 func _open(mode: String) -> void:
 	SharedData.mode = mode
-	get_tree().change_scene_to_file("res://scenes/shared_editor.tscn")
+	get_tree().change_scene_to_file("res://scenes/racing_editor.tscn" if mode == "racing" else "res://scenes/shared_editor.tscn")

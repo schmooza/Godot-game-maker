@@ -36,7 +36,7 @@ var current_hp := 3
 var restart_pending := false
 var hidden_edit: CheckBox
 var inventory_label: Label
-const ACTIONS := ["inspect", "swap", "reveal", "collect", "unlock", "password"]
+const ACTIONS := ["inspect", "swap", "reveal", "collect", "unlock", "password", "go_to_room", "win_game"]
 var file_dialog: FileDialog
 var import_slot := ""
 var drag_index := -1
@@ -62,6 +62,11 @@ var viewport_holder: AspectRatioContainer
 var main_row: HBoxContainer
 var appearance_inputs: Dictionary = {}
 var inventory_panel: PanelContainer
+var room_picker: OptionButton
+var room_name_input: LineEdit
+var destination_picker: OptionButton
+var room_states: Dictionary = {}
+var shared_inventory: Array = []
 const APPEARANCE_DEFAULTS := {"dialogue_background":"#242424", "dialogue_text":"#FFFFFF", "dialogue_font_size":18, "inventory_background":"#303030", "inventory_text":"#FFFFFF", "inventory_font_size":16, "scene_tint":"#FFFFFF"}
 
 
@@ -156,7 +161,7 @@ func _build() -> void:
 	for m in SharedData.MODES:
 		mode_picker.add_item({"adventure":"Adventure","racing":"Car racing","boss":"Boss fight"}[m])
 	mode_picker.select(SharedData.MODES.find(SharedData.mode))
-	mode_picker.item_selected.connect(func(index: int): SharedData.mode = SharedData.MODES[index]; testing = false; _rebuild())
+	mode_picker.item_selected.connect(func(index: int): SharedData.mode = SharedData.MODES[index]; testing = false; get_tree().change_scene_to_file("res://scenes/racing_editor.tscn") if SharedData.mode == "racing" else _rebuild())
 	toolbar.add_child(mode_picker)
 	_button(toolbar, "Save", _save)
 	_button(toolbar, "Play / Test", _start_test)
@@ -176,6 +181,16 @@ func _build() -> void:
 	var left := VBoxContainer.new()
 	left.custom_minimum_size.x = 270
 	editor_panel.add_child(left)
+	var room_heading := Label.new()
+	room_heading.text = "ROOMS (Adventure)"
+	left.add_child(room_heading)
+	room_picker = OptionButton.new()
+	room_picker.item_selected.connect(_choose_room)
+	left.add_child(room_picker)
+	room_name_input = LineEdit.new()
+	room_name_input.placeholder_text = "New room name (e.g. Room 2)"
+	left.add_child(room_name_input)
+	_button(left, "Add Room", _add_room)
 	var instruction := Label.new()
 	instruction.text = "SCENE EDITOR\nDrag objects in the room.\nSelect an object to edit it.\nImport images or add an object.\nSave, then Play / Test."
 	left.add_child(instruction)
@@ -227,6 +242,12 @@ func _build() -> void:
 				"Target object ID": target_edit = edit
 				"Inventory item": item_edit = edit
 				"Required item": required_edit = edit
+	var destination_label := Label.new()
+	destination_label.text = "Destination Room (Go to Room / Unlock)"
+	left.add_child(destination_label)
+	destination_picker = OptionButton.new()
+	destination_picker.item_selected.connect(func(_i: int): _apply_properties())
+	left.add_child(destination_picker)
 	var password_label := Label.new()
 	password_label.text = "Password (Adventure password action)"
 	left.add_child(password_label)
@@ -447,8 +468,52 @@ func _build() -> void:
 	file_dialog.file_selected.connect(_image_selected)
 	add_child(file_dialog)
 
+func _refresh_room_controls() -> void:
+	room_picker.visible = SharedData.mode == "adventure"
+	room_name_input.visible = SharedData.mode == "adventure"
+	room_picker.clear()
+	destination_picker.clear()
+	destination_picker.add_item("None / finish game")
+	if SharedData.mode != "adventure":
+		return
+	var rooms := SharedData.room_names()
+	for room in rooms:
+		room_picker.add_item(str(room))
+		destination_picker.add_item(str(room))
+	room_picker.select(rooms.find(SharedData.active_room))
+
+func _choose_room(index: int) -> void:
+	if testing or SharedData.mode != "adventure": return
+	var rooms := SharedData.room_names()
+	if index < 0 or index >= rooms.size(): return
+	SharedData.active_room = str(rooms[index])
+	selected = 0
+	_rebuild()
+
+func _add_room() -> void:
+	if testing or SharedData.mode != "adventure": return
+	if SharedData.add_room(room_name_input.text):
+		selected = -1
+		room_name_input.clear()
+		SharedData.save()
+		_rebuild()
+		status.text = "New room created. Import a background and add objects."
+	else:
+		status.text = "Enter a unique room name."
+
+func _change_room(destination: String) -> void:
+	if not SharedData.room_names().has(destination):
+		return
+	room_states[SharedData.active_room] = state
+	SharedData.active_room = destination
+	state = room_states.get(destination, {})
+	state["items"] = shared_inventory
+	pending_password_id = ""
+	play_highlight_id = ""
+	_rebuild()
+
 func _appearance() -> Dictionary:
-	var scene: Dictionary = SharedData.scenes[SharedData.mode]
+	var scene: Dictionary = SharedData.current_scene()
 	var saved: Dictionary = scene.get("appearance", {})
 	var result := APPEARANCE_DEFAULTS.duplicate()
 	for key in saved:
@@ -457,17 +522,17 @@ func _appearance() -> Dictionary:
 
 func _appearance_text_changed(value: String, setting: String) -> void:
 	if not value.begins_with("#") or not value.is_valid_html_color(): return
-	SharedData.scenes[SharedData.mode]["appearance"] = _appearance()
-	SharedData.scenes[SharedData.mode]["appearance"][setting] = value
+	SharedData.current_scene()["appearance"] = _appearance()
+	SharedData.current_scene()["appearance"][setting] = value
 	_apply_appearance()
 
 func _appearance_changed(value: float, setting: String) -> void:
-	SharedData.scenes[SharedData.mode]["appearance"] = _appearance()
-	SharedData.scenes[SharedData.mode]["appearance"][setting] = int(value)
+	SharedData.current_scene()["appearance"] = _appearance()
+	SharedData.current_scene()["appearance"][setting] = int(value)
 	_apply_appearance()
 
 func _reset_appearance() -> void:
-	SharedData.scenes[SharedData.mode]["appearance"] = APPEARANCE_DEFAULTS.duplicate()
+	SharedData.current_scene()["appearance"] = APPEARANCE_DEFAULTS.duplicate()
 	_sync_appearance_inputs()
 	_apply_appearance()
 
@@ -502,14 +567,14 @@ func _apply_appearance() -> void:
 	backdrop.modulate = Color.html(str(config["scene_tint"]))
 
 func _starting_hp() -> int:
-	return maxi(1, int(SharedData.scenes[SharedData.mode].get("starting_hp", 3)))
+	return maxi(1, int(SharedData.current_scene().get("starting_hp", 3)))
 
 func _set_start_hp(value: float) -> void:
 	if testing: return
-	SharedData.scenes[SharedData.mode]["starting_hp"] = int(value)
+	SharedData.current_scene()["starting_hp"] = int(value)
 
 func _items() -> Array:
-	return SharedData.scenes[SharedData.mode]["objects"]
+	return SharedData.current_scene()["objects"]
 
 func _mark_visual(control: Control, active: bool, in_play: bool) -> void:
 	# Keep the image itself highlighted in Play Mode; outline only in Edit Mode.
@@ -538,6 +603,7 @@ func _refresh_object_highlights() -> void:
 		_mark_visual(control, active, testing)
 
 func _rebuild() -> void:
+	_refresh_room_controls()
 	_sync_appearance_inputs()
 	_apply_appearance()
 	start_hp_edit.set_block_signals(true)
@@ -608,7 +674,7 @@ func _rebuild() -> void:
 		_select(clampi(selected, 0, items.size() - 1))
 	elif not testing:
 		selected = -1
-	mode_banner.text = "PLAY MODE — Click objects to investigate" if testing else "EDIT MODE — Arrange your scene"
+	mode_banner.text = ("PLAY MODE — " if testing else "EDIT MODE — ") + (SharedData.active_room if SharedData.mode == "adventure" else SharedData.mode.capitalize())
 	editor_panel.visible = not testing
 	play_dialogue_panel.visible = testing
 	# The editor uses the whole width for the scene; Play Mode is 1:2.
@@ -634,7 +700,7 @@ func _select(index: int) -> void:
 	y_edit.set_block_signals(true)
 	w_edit.set_block_signals(true)
 	h_edit.set_block_signals(true)
-	for widget in [action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit]:
+	for widget in [action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker]:
 		widget.set_block_signals(true)
 	label_edit.text = str(o["label"])
 	x_edit.value = round(float(o["x"]) * 100.0)
@@ -642,6 +708,9 @@ func _select(index: int) -> void:
 	w_edit.value = float(o["w"])
 	h_edit.value = float(o["h"])
 	action_edit.select(maxi(0, ACTIONS.find(str(o.get("action", "inspect")))))
+	var destination := str(o.get("destination_room", ""))
+	var destination_index := SharedData.room_names().find(destination) + 1 if SharedData.mode == "adventure" else 0
+	destination_picker.select(maxi(0, destination_index))
 	target_edit.text = str(o.get("target", ""))
 	message_edit.text = str(o.get("message", ""))
 	item_edit.text = str(o.get("item", ""))
@@ -651,7 +720,7 @@ func _select(index: int) -> void:
 	damage_edit.value = int(o.get("damage", 0))
 	damage_message_edit.text = str(o.get("damage_message", ""))
 	hidden_edit.button_pressed = bool(o.get("hidden", false))
-	for widget in [label_edit, x_edit, y_edit, w_edit, h_edit, action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit]:
+	for widget in [label_edit, x_edit, y_edit, w_edit, h_edit, action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker]:
 		widget.set_block_signals(false)
 
 func _apply_properties() -> void:
@@ -663,6 +732,7 @@ func _apply_properties() -> void:
 	o["w"] = w_edit.value
 	o["h"] = h_edit.value
 	o["action"] = ACTIONS[action_edit.selected]
+	o["destination_room"] = destination_picker.get_item_text(destination_picker.selected) if destination_picker.selected > 0 else ""
 	o["target"] = target_edit.text
 	o["message"] = message_edit.text
 	o["item"] = item_edit.text
@@ -744,6 +814,11 @@ func _start_test() -> void:
 		status.text = "Save failed; starting test with unsaved changes."
 	testing = true
 	state.clear()
+	room_states.clear()
+	shared_inventory.clear()
+	SharedData.active_room = "Room 1"
+	SharedData.ensure_rooms()
+	state["items"] = shared_inventory
 	current_hp = _starting_hp()
 	restart_pending = false
 	pending_password_id = ""
@@ -824,8 +899,20 @@ func _interact(id: String) -> void:
 			var inventory: Array = state.get("items", [])
 			if not inventory.has(item_name): inventory.append(item_name)
 			state["items"] = inventory
+			shared_inventory = inventory
 			state["collected_" + id] = true
 			status.text = message if not message.is_empty() else "Collected: " + item_name
+		"go_to_room":
+			var destination := str(obj.get("destination_room", ""))
+			if SharedData.room_names().has(destination):
+				_change_room(destination)
+				play_dialogue.text = message if not message.is_empty() else "You entered " + destination + "."
+				return
+			status.text = "Choose a valid Destination Room in Edit Mode."
+		"win_game":
+			won = true
+			status.text = message if not message.is_empty() else "You escaped!"
+			status.text += "  YOU WIN!"
 		"unlock":
 			var required := str(obj.get("required", ""))
 			var inventory: Array = state.get("items", [])
@@ -836,6 +923,12 @@ func _interact(id: String) -> void:
 				if not required.is_empty():
 					inventory.erase(required)
 					state["items"] = inventory
+				shared_inventory = inventory
+				var destination := str(obj.get("destination_room", ""))
+				if SharedData.room_names().has(destination):
+					_change_room(destination)
+					play_dialogue.text = message if not message.is_empty() else "Door unlocked. Entered " + destination + "."
+					return
 				won = true
 				status.text = message if not message.is_empty() else "Unlocked!"
 				status.text += "  YOU WIN!"

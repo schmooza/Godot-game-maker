@@ -3,6 +3,7 @@ const PATH := "user://shared_scenes.json"
 const MODES := ["adventure", "racing", "boss"]
 var mode := "adventure"
 var scenes: Dictionary = {}
+var active_room := "Room 1"
 
 func _ready() -> void:
 	reset_defaults()
@@ -12,6 +13,7 @@ func _ready() -> void:
 			for key in MODES:
 				if parsed.has(key) and parsed[key] is Dictionary:
 					scenes[key] = parsed[key]
+	ensure_rooms()
 
 func reset_defaults() -> void:
 	scenes = {
@@ -29,6 +31,41 @@ func reset_defaults() -> void:
 			{"id":"enemy","label":"Boss","x":0.50,"y":0.19,"w":115,"h":100}]}
 	}
 
+func ensure_rooms() -> void:
+	var adventure: Dictionary = scenes["adventure"]
+	if not adventure.has("rooms"):
+		var original: Dictionary = adventure.duplicate(true)
+		adventure["rooms"] = {"Room 1": original}
+		adventure.erase("objects")
+		adventure.erase("appearance")
+		adventure.erase("starting_hp")
+	if not adventure["rooms"].has(active_room):
+		active_room = "Room 1"
+
+func room_names() -> Array:
+	ensure_rooms()
+	return scenes["adventure"]["rooms"].keys()
+
+func current_scene() -> Dictionary:
+	if mode == "adventure":
+		ensure_rooms()
+		return scenes["adventure"]["rooms"][active_room]
+	return scenes[mode]
+
+func add_room(name: String) -> bool:
+	ensure_rooms()
+	name = name.strip_edges()
+	if name.is_empty() or scenes["adventure"]["rooms"].has(name):
+		return false
+	scenes["adventure"]["rooms"][name] = {"objects": [], "appearance": {}}
+	active_room = name
+	return true
+
+func room_slot(slot: String) -> String:
+	if mode != "adventure" or active_room == "Room 1":
+		return slot
+	return "room_" + active_room.sha256_text().substr(0, 12) + "_" + slot
+
 func save() -> bool:
 	var f := FileAccess.open(PATH,FileAccess.WRITE)
 	if f == null: return false
@@ -37,7 +74,7 @@ func save() -> bool:
 	return true
 
 func image_path(slot: String) -> String:
-	return "user://shared_" + mode + "_" + slot + ".png"
+	return "user://shared_" + mode + "_" + room_slot(slot) + ".png"
 
 func texture(slot: String) -> Texture2D:
 	var image := Image.new()
@@ -63,3 +100,6 @@ func reset_mode() -> void:
 	var default_scene: Dictionary = scenes[current].duplicate(true)
 	scenes = saved
 	scenes[current] = default_scene
+	if current == "adventure":
+		active_room = "Room 1"
+		ensure_rooms()
