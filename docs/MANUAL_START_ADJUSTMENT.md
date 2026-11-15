@@ -1,0 +1,1 @@
+Racing editor: Set start position by clicking the road, then adjust Start X, Start Y, and Starting car angle (degrees). Values save separately per track. Reset start angle to AUTO returns to checkpoint-aware road alignment. The car preview updates immediately and Play / Test / Restart use the saved adjustments. Position changes must remain on the road.

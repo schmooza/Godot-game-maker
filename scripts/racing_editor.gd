@@ -49,6 +49,11 @@ var placing_checkpoints := false
 var placing_start := false
 var custom_start_position := Vector2(-1.0, -1.0)
 var start_toggle_button: Button
+var start_x_spin: SpinBox
+var start_y_spin: SpinBox
+var start_angle_spin: SpinBox
+var manual_start_angle := -1.0
+var updating_start_controls := false
 var checkpoint_info: Label
 var checkpoint_toggle_button: Button
 var road_cells: Dictionary = {}
@@ -226,6 +231,42 @@ func _build() -> void:
 	start_toggle_button.text = "SET start position (click road)"
 	start_toggle_button.pressed.connect(_toggle_start_placement)
 	scene_panel.add_child(start_toggle_button)
+	var fine_title := Label.new()
+	fine_title.text = "MANUAL START ADJUSTMENT"
+	scene_panel.add_child(fine_title)
+	var fine_hint := Label.new()
+	fine_hint.text = "Fine-tune the start position and car angle. Changes are saved per track."
+	fine_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	scene_panel.add_child(fine_hint)
+	var x_label := Label.new()
+	x_label.text = "Start X (pixels)"
+	scene_panel.add_child(x_label)
+	start_x_spin = SpinBox.new()
+	start_x_spin.min_value = 0
+	start_x_spin.max_value = int(CANVAS.x)
+	start_x_spin.step = 1
+	start_x_spin.value_changed.connect(_on_start_position_adjusted)
+	scene_panel.add_child(start_x_spin)
+	var y_label := Label.new()
+	y_label.text = "Start Y (pixels)"
+	scene_panel.add_child(y_label)
+	start_y_spin = SpinBox.new()
+	start_y_spin.min_value = 0
+	start_y_spin.max_value = int(CANVAS.y)
+	start_y_spin.step = 1
+	start_y_spin.value_changed.connect(_on_start_position_adjusted)
+	scene_panel.add_child(start_y_spin)
+	var angle_label := Label.new()
+	angle_label.text = "Starting car angle (degrees)"
+	scene_panel.add_child(angle_label)
+	start_angle_spin = SpinBox.new()
+	start_angle_spin.min_value = 0
+	start_angle_spin.max_value = 359
+	start_angle_spin.step = 1
+	start_angle_spin.value_changed.connect(_on_start_angle_adjusted)
+	scene_panel.add_child(start_angle_spin)
+	_button(scene_panel, "Reset start angle to AUTO", _reset_start_angle_auto)
+
 	race_panel = _section(sidebar, "RACE TIMES", Color("#8cdea6"))
 	timer_label = Label.new()
 	race_panel.add_child(timer_label)
@@ -621,8 +662,9 @@ func _reset_car() -> void:
 		car_position = CANVAS / 2.0
 	else:
 			car_position = _start_position()
-	car_angle = _starting_track_angle()
+	car_angle = deg_to_rad(manual_start_angle) if manual_start_angle >= 0.0 else _starting_track_angle()
 	car_speed = 0.0
+	_sync_start_controls()
 	if car_view != null:
 		car_view.queue_redraw()
 
@@ -840,18 +882,60 @@ func _save_start_position() -> void:
 		var entry: Dictionary = track_library[i]
 		if str(entry.get("id", "")) == active_track_id:
 			entry["start_position"] = [custom_start_position.x, custom_start_position.y]
+			entry["start_angle_degrees"] = manual_start_angle
 			track_library[i] = entry
 			_save_track_library()
 			break
 
 func _restore_start_position() -> void:
 	custom_start_position = Vector2(-1.0, -1.0)
+	manual_start_angle = -1.0
 	for entry in track_library:
 		if str(entry.get("id", "")) == active_track_id:
 			var stored: Variant = entry.get("start_position", [])
 			if stored is Array and stored.size() == 2:
 				custom_start_position = Vector2(float(stored[0]), float(stored[1]))
+			manual_start_angle = float(entry.get("start_angle_degrees", -1.0))
 			break
+	_sync_start_controls()
+
+func _sync_start_controls() -> void:
+	if start_x_spin == null or start_y_spin == null or start_angle_spin == null:
+		return
+	updating_start_controls = true
+	var start_pos: Vector2 = _start_position()
+	start_x_spin.value = start_pos.x
+	start_y_spin.value = start_pos.y
+	var angle: float = deg_to_rad(manual_start_angle) if manual_start_angle >= 0.0 else _starting_track_angle()
+	start_angle_spin.value = posmod(int(round(rad_to_deg(angle))), 360)
+	updating_start_controls = false
+
+func _on_start_position_adjusted(_value: float) -> void:
+	if updating_start_controls or track_points.is_empty():
+		return
+	var proposed := Vector2(start_x_spin.value, start_y_spin.value)
+	if not _on_road(proposed):
+		status.text = "Start is off the road. Adjust X / Y until it is on the road."
+		return
+	custom_start_position = proposed
+	_save_start_position()
+	_reset_car()
+	track_view.queue_redraw()
+	status.text = "Start position saved for this track."
+
+func _on_start_angle_adjusted(value: float) -> void:
+	if updating_start_controls or track_points.is_empty():
+		return
+	manual_start_angle = value
+	_save_start_position()
+	_reset_car()
+	status.text = "Manual starting angle saved for this track."
+
+func _reset_start_angle_auto() -> void:
+	manual_start_angle = -1.0
+	_save_start_position()
+	_reset_car()
+	status.text = "Starting angle restored to automatic road alignment."
 
 func _update_checkpoint_info() -> void:
 	if checkpoint_info == null:
