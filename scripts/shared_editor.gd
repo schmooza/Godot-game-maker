@@ -20,9 +20,17 @@ var w_edit: SpinBox
 var h_edit: SpinBox
 var label_edit: LineEdit
 var action_edit: OptionButton
-var target_edit: LineEdit
+var target_edit: OptionButton
+var blocker_edit: OptionButton
+var blocked_message_edit: TextEdit
 var message_edit: TextEdit
+var post_use_message_edit: TextEdit
 var item_edit: LineEdit
+var use_effect_edit: OptionButton
+var consume_item_edit: CheckBox
+var simple_item_picker: OptionButton
+var simple_damage: SpinBox
+var simple_help: Label
 var required_edit: LineEdit
 var password_edit: LineEdit
 var wrong_edit: LineEdit
@@ -41,7 +49,7 @@ var current_hp := 3
 var restart_pending := false
 var hidden_edit: CheckBox
 var inventory_label: Label
-const ACTIONS := ["inspect", "swap", "reveal", "collect", "unlock", "password", "go_to_room", "win_game"]
+const ACTIONS := ["inspect", "swap", "reveal", "collect", "unlock", "password", "go_to_room", "win_game", "use_item"]
 var file_dialog: FileDialog
 var import_slot := ""
 var drag_index := -1
@@ -60,6 +68,8 @@ var player_pos := Vector2(480, 450)
 var game_canvas: Control
 var editor_panel: ScrollContainer
 var mode_banner: Label
+var use_item_button: Button
+var pending_use_item_id := ""
 var play_dialogue: TextEdit
 var play_dialogue_panel: Control
 var play_layout: HBoxContainer
@@ -124,17 +134,53 @@ func _organise_editor_sections(left: VBoxContainer, instruction: Label, picker: 
 			ui_controls.append(node)
 		else:
 			item_controls.append(node)
+	# Keep object selection and the entire quick-action panel together.
+	# _section_panel returns its CONTENT VBoxContainer, not its PanelContainer.
+	# The previous layout looked for a PanelContainer and accidentally hid the
+	# quick actions in the collapsed advanced section.
+	var quick_controls: Array[Node] = []
+	for node in item_controls.duplicate():
+		var is_quick_panel: bool = node is PanelContainer and node.get_child_count() > 0 and node.get_child(0) is VBoxContainer and node.get_child(0).get_child_count() > 0 and node.get_child(0).get_child(0) is Label and str(node.get_child(0).get_child(0).text).begins_with("QUICK INTERACTION SETUP")
+		if node == label_edit or (node is Label and node.text == "Object name") or is_quick_panel:
+			item_controls.erase(node)
+			quick_controls.append(node)
 	var scene_content := _section_panel("SCENE & GAME SETTINGS", Color(0.44, 0.76, 0.98))
 	var item_content := _section_panel("ITEMS & INTERACTIONS", Color(0.99, 0.73, 0.37))
 	var ui_content := _section_panel("UI & APPEARANCE", Color(0.55, 0.87, 0.65))
-	# Move each panel's existing controls without recreating them.
 	for content in [scene_content, item_content, ui_content]:
 		var panel: PanelContainer = content.get_parent()
 		left.add_child(panel)
 	for node in scene_controls:
 		node.reparent(scene_content)
-	for node in item_controls:
+	# Keep room/object selection usable without opening Advanced.
+	for node in item_controls.duplicate():
+		if node == object_picker or node == room_picker or node == room_name_input or (node is Button and node.text in ["Add Room", "Add object", "Remove selected", "Import selected image"]) or (node is Label and node.text == "ROOMS (Adventure)"):
+			node.reparent(item_content)
+			item_controls.erase(node)
+	# Put object name and coloured quick actions immediately after object selection.
+	for node in quick_controls:
 		node.reparent(item_content)
+	# Make the whole quick panel visible, not just its heading.
+	var quick_start: int = 0
+	for i in range(item_content.get_child_count()):
+		if item_content.get_child(i) == object_picker:
+			quick_start = i + 1
+			break
+	for node in quick_controls:
+		item_content.move_child(node, quick_start)
+		quick_start += 1
+	var advanced_toggle := Button.new()
+	advanced_toggle.text = "Show advanced interaction settings"
+	item_content.add_child(advanced_toggle)
+	var advanced_content := VBoxContainer.new()
+	advanced_content.visible = false
+	item_content.add_child(advanced_content)
+	advanced_toggle.pressed.connect(func():
+		advanced_content.visible = not advanced_content.visible
+		advanced_toggle.text = "Hide advanced interaction settings" if advanced_content.visible else "Show advanced interaction settings"
+	)
+	for node in item_controls:
+		node.reparent(advanced_content)
 	for node in ui_controls:
 		node.reparent(ui_content)
 
@@ -152,6 +198,27 @@ func _button(parent: Node, caption: String, callback: Callable) -> Button:
 	b.text = caption
 	b.pressed.connect(callback)
 	parent.add_child(b)
+	return b
+
+func _quick_color_button(parent: Node, caption: String, callback: Callable, tint: Color, tip: String) -> Button:
+	var b: Button = _button(parent, caption, callback)
+	b.tooltip_text = tip
+	b.custom_minimum_size.y = 36
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = tint
+	normal.set_corner_radius_all(6)
+	normal.content_margin_left = 10
+	normal.content_margin_right = 10
+	b.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = tint.lightened(0.16)
+	b.add_theme_stylebox_override("hover", hover)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = tint.darkened(0.18)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	b.add_theme_color_override("font_hover_color", Color.WHITE)
+	b.add_theme_color_override("font_pressed_color", Color.WHITE)
 	return b
 
 func _install_editable_tooltips() -> void:
@@ -293,6 +360,37 @@ func _build() -> void:
 	label_edit = LineEdit.new()
 	label_edit.text_changed.connect(func(_value: String): _apply_properties())
 	left.add_child(label_edit)
+	# Student-friendly presets configure the existing action fields; advanced settings remain available.
+	var simple_panel := _section_panel("PLAYER INTERACTIONS — SELECT AN OBJECT FIRST", Color(0.53, 0.91, 0.65))
+	left.add_child(simple_panel.get_parent())
+	simple_help = Label.new()
+	simple_help.text = "STEP 1: Select the item object (e.g. gun), then click COLLECT. STEP 2: Select the target (e.g. Enemy), choose the item below, then click USE ITEM ON THIS OBJECT."
+	simple_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	simple_panel.add_child(simple_help)
+	_quick_color_button(simple_panel, "1. COLLECT THIS OBJECT  |  Add to player inventory", func(): _simple_preset("collect"), Color(0.13, 0.45, 0.25), "Make this object collectible and add it to the player inventory.")
+	var item_caption := Label.new()
+	item_caption.text = "2. REQUIRED INVENTORY ITEM  |  What will the player use?"
+	simple_panel.add_child(item_caption)
+	simple_item_picker = OptionButton.new()
+	simple_item_picker.tooltip_text = "Choose an item collected earlier. The PLAYER uses this item on the selected object; the object does not attack itself."
+	simple_panel.add_child(simple_item_picker)
+	var damage_row := HBoxContainer.new()
+	simple_panel.add_child(damage_row)
+	var damage_caption := Label.new()
+	damage_caption.text = "DAMAGE TO SELECTED OBJECT"
+	damage_row.add_child(damage_caption)
+	simple_damage = SpinBox.new()
+	simple_damage.min_value = 1
+	simple_damage.max_value = 100
+	simple_damage.value = 1
+	damage_row.add_child(simple_damage)
+	_quick_color_button(simple_panel, "USE ITEM ON THIS OBJECT  |  Player damages target", func(): _simple_preset("attack"), Color(0.62, 0.19, 0.19), "The PLAYER clicks the selected object and uses the inventory item above to damage it.")
+	_quick_color_button(simple_panel, "USE ITEM TO UNLOCK THIS OBJECT", func(): _simple_preset("unlock"), Color(0.14, 0.35, 0.63), "Require the selected inventory item to unlock or activate this object.")
+	_quick_color_button(simple_panel, "HEAL PLAYER  |  Restore 1 HP", func(): _simple_preset("heal"), Color(0.42, 0.23, 0.58), "Make this object restore one health point when clicked.")
+	_quick_color_button(simple_panel, "DOOR BLOCKER WIZARD  |  Set up Enemy + Door", _open_door_blocker_wizard, Color(0.29, 0.38, 0.60), "Connect an enemy, a door and an optional inventory item with dialogue.")
+	var advanced_note := Label.new()
+	advanced_note.text = "Choose the object first, then its action. Advanced settings remain available below."
+	simple_panel.add_child(advanced_note)
 	var action_heading := Label.new()
 	action_heading.text = "On click (Adventure)"
 	left.add_child(action_heading)
@@ -304,7 +402,12 @@ func _build() -> void:
 		var name_label := Label.new()
 		name_label.text = field
 		left.add_child(name_label)
-		if field == "Message":
+		if field == "Target object ID":
+			target_edit = OptionButton.new()
+			target_edit.tooltip_text = "Select the object this action affects. The correct internal ID is saved automatically."
+			target_edit.item_selected.connect(func(_i: int): _apply_properties())
+			left.add_child(target_edit)
+		elif field == "Message":
 			message_edit = TextEdit.new()
 			message_edit.custom_minimum_size = Vector2(0, 120)
 			message_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -324,9 +427,52 @@ func _build() -> void:
 			edit.text_changed.connect(func(_v: String): _apply_properties())
 			left.add_child(edit)
 			match field:
-				"Target object ID": target_edit = edit
 				"Inventory item": item_edit = edit
 				"Required item": required_edit = edit
+	var post_use_label := Label.new()
+	post_use_label.text = "POST-USE DIALOGUE (shown after using an item)"
+	left.add_child(post_use_label)
+	post_use_message_edit = TextEdit.new()
+	post_use_message_edit.custom_minimum_size = Vector2(0, 100)
+	post_use_message_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	post_use_message_edit.placeholder_text = "Example: The enemy staggers backwards."
+	post_use_message_edit.tooltip_text = "Shown after the player successfully uses the required inventory item. The Message field above is the inspection description."
+	post_use_message_edit.text_changed.connect(_apply_properties)
+	left.add_child(post_use_message_edit)
+	var use_heading := Label.new()
+	use_heading.text = "USE ITEM ON OBJECT (select Use Item action)"
+	left.add_child(use_heading)
+	var use_help := Label.new()
+	use_help.text = "Required item = inventory name; Target object = choose the object affected.\nHP change below affects the target, not the player."
+	use_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	left.add_child(use_help)
+	use_effect_edit = OptionButton.new()
+	for effect_name in ["Message only", "Damage target", "Reveal target", "Remove target"]:
+		use_effect_edit.add_item(effect_name)
+	use_effect_edit.tooltip_text = "Choose what using the inventory item does to the target object. Damage uses the HP change value (negative number)."
+	use_effect_edit.item_selected.connect(func(_i: int): _apply_properties())
+	left.add_child(use_effect_edit)
+	consume_item_edit = CheckBox.new()
+	consume_item_edit.text = "Consume required item after use"
+	consume_item_edit.tooltip_text = "When checked, remove the required item from inventory after a successful interaction."
+	consume_item_edit.toggled.connect(func(_v: bool): _apply_properties())
+	left.add_child(consume_item_edit)
+	var blocker_label := Label.new()
+	blocker_label.text = "DOOR BLOCKED BY (Go to Room / Unlock)"
+	left.add_child(blocker_label)
+	blocker_edit = OptionButton.new()
+	blocker_edit.tooltip_text = "Choose an object that must be defeated or removed before this door can open."
+	blocker_edit.item_selected.connect(func(_i: int): _apply_properties())
+	left.add_child(blocker_edit)
+	var blocked_label := Label.new()
+	blocked_label.text = "BLOCKED DIALOGUE"
+	left.add_child(blocked_label)
+	blocked_message_edit = TextEdit.new()
+	blocked_message_edit.custom_minimum_size = Vector2(0, 75)
+	blocked_message_edit.placeholder_text = "Example: Someone stands in front of the door."
+	blocked_message_edit.tooltip_text = "Displayed while the blocking object is still active. No item hints are shown."
+	blocked_message_edit.text_changed.connect(_apply_properties)
+	left.add_child(blocked_message_edit)
 	var destination_label := Label.new()
 	destination_label.text = "Destination Room (Go to Room / Unlock)"
 	left.add_child(destination_label)
@@ -462,6 +608,10 @@ func _build() -> void:
 	play_style.content_margin_bottom = 5.0
 	play_dialogue.add_theme_stylebox_override("normal", play_style)
 	dialogue_stack.add_child(play_dialogue)
+	use_item_button = Button.new()
+	use_item_button.visible = false
+	use_item_button.pressed.connect(_use_selected_item)
+	dialogue_stack.add_child(use_item_button)
 	password_row = VBoxContainer.new()
 	dialogue_stack.add_child(password_row)
 	var password_prompt := Label.new()
@@ -758,6 +908,7 @@ func _rebuild() -> void:
 				b.gui_input.connect(_drag_input.bind(i))
 			objects_layer.add_child(b)
 	_refresh_object_highlights()
+	_refresh_simple_items()
 	if not testing and items.size() > 0:
 		_select(clampi(selected, 0, items.size() - 1))
 	elif not testing:
@@ -773,9 +924,213 @@ func _rebuild() -> void:
 		play_dialogue.text = status.text
 	else:
 		status.text = "EDIT: Drag objects on the scene. Save your layout before testing."
+	if use_item_button != null:
+		use_item_button.visible = testing and not pending_use_item_id.is_empty() and SharedData.mode == "adventure"
 	password_row.visible = testing and not pending_password_id.is_empty() and SharedData.mode == "adventure"
 	_update_inventory()
 	game_canvas.queue_redraw()
+
+func _refresh_simple_items() -> void:
+	if simple_item_picker == null:
+		return
+	var previous: String = ""
+	if simple_item_picker.selected >= 0:
+		previous = str(simple_item_picker.get_item_metadata(simple_item_picker.selected))
+	simple_item_picker.clear()
+	simple_item_picker.add_item("Choose collected item...")
+	simple_item_picker.set_item_metadata(0, "")
+	var selection_index: int = 0
+	for entry in _items():
+		if str(entry.get("action", "")) != "collect":
+			continue
+		var item_name: String = str(entry.get("item", ""))
+		if item_name.is_empty():
+			item_name = str(entry.get("label", ""))
+		if item_name.is_empty():
+			continue
+		var index: int = simple_item_picker.item_count
+		simple_item_picker.add_item(item_name)
+		simple_item_picker.set_item_metadata(index, item_name)
+		if item_name == previous:
+			selection_index = index
+	simple_item_picker.select(selection_index)
+
+func _simple_preset(preset: String) -> void:
+	if testing or selected < 0 or selected >= _items().size():
+		return
+	var obj: Dictionary = _items()[selected]
+	var item_name: String = ""
+	if simple_item_picker.selected > 0:
+		item_name = str(simple_item_picker.get_item_metadata(simple_item_picker.selected))
+	if preset in ["attack", "unlock"] and item_name.is_empty():
+		simple_help.text = "First make another object collectible, then select its item name above."
+		return
+	match preset:
+		"collect":
+			obj["action"] = "collect"
+			obj["item"] = str(obj.get("label", "Item"))
+			obj["hp_change"] = 0
+		"attack":
+			obj["action"] = "use_item"
+			obj["required"] = item_name
+			obj["target"] = str(obj.get("id", ""))
+			obj["use_effect"] = 1
+			obj["hp_change"] = -int(simple_damage.value)
+			obj["consume_item"] = false
+		"unlock":
+			obj["action"] = "unlock"
+			obj["required"] = item_name
+			obj["hp_change"] = 0
+		"heal":
+			obj["action"] = "inspect"
+			obj["hp_change"] = 1
+	_select(selected)
+	simple_help.text = ("Player collects " + str(obj.get("label", "item")) + "." if preset == "collect" else "Player uses " + item_name + " on " + str(obj.get("label", "target")) + "." if preset == "attack" else "Player uses " + item_name + " to unlock " + str(obj.get("label", "object")) + "." if preset == "unlock" else "Player heals by clicking " + str(obj.get("label", "object")) + ".") + " Click Save, then Play / Test."
+
+func _open_door_blocker_wizard() -> void:
+	if testing or SharedData.mode != "adventure":
+		return
+	if _items().size() < 2:
+		status.text = "Add at least two objects (a blocker and a door) first."
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Door Blocker Wizard"
+	dialog.ok_button_text = "Create Door Blocker"
+	dialog.min_size = Vector2i(560, 500)
+	add_child(dialog)
+	# Keep the built-in Cancel/Create buttons visible while the fields scroll.
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(520, 390)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	dialog.add_child(scroll)
+	var content := VBoxContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_theme_constant_override("separation", 7)
+	scroll.add_child(content)
+	var intro := Label.new()
+	intro.text = "Choose the blocker and the door. The player sees dialogue, not item hints."
+	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(intro)
+	var enemy_picker := OptionButton.new()
+	var door_picker := OptionButton.new()
+	for entry in _items():
+		var name: String = str(entry.get("label", "Object"))
+		enemy_picker.add_item(name)
+		enemy_picker.set_item_metadata(enemy_picker.item_count - 1, str(entry.get("id", "")))
+		door_picker.add_item(name)
+		door_picker.set_item_metadata(door_picker.item_count - 1, str(entry.get("id", "")))
+		if name.to_lower().contains("enemy") or name.to_lower().contains("guard"):
+			enemy_picker.select(enemy_picker.item_count - 1)
+		if name.to_lower().contains("door") or name.to_lower().contains("gate"):
+			door_picker.select(door_picker.item_count - 1)
+	_wizard_field(content, "Object blocking the door", enemy_picker)
+	_wizard_field(content, "Door to block", door_picker)
+	var item_picker := OptionButton.new()
+	item_picker.add_item("No item required (remove blocker manually)")
+	item_picker.set_item_metadata(0, "")
+	for entry in _items():
+		if str(entry.get("action", "")) == "collect":
+			var item_name: String = str(entry.get("item", ""))
+			if item_name.is_empty(): item_name = str(entry.get("label", ""))
+			item_picker.add_item(item_name)
+			item_picker.set_item_metadata(item_picker.item_count - 1, item_name)
+	_wizard_field(content, "Inventory item used on blocker", item_picker)
+	var enemy_message := LineEdit.new()
+	enemy_message.placeholder_text = "A dangerous enemy watches the doorway."
+	_wizard_field(content, "Blocker description (inspection)", enemy_message)
+	var blocked_message := LineEdit.new()
+	blocked_message.text = "Someone stands in front of the door."
+	_wizard_field(content, "Dialogue when door is blocked", blocked_message)
+	var post_message := LineEdit.new()
+	post_message.text = "The enemy falls. The path is clear."
+	_wizard_field(content, "Dialogue after using the item", post_message)
+	var warning := Label.new()
+	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(warning)
+	dialog.confirmed.connect(func() -> void:
+		var blocker_id: String = str(enemy_picker.get_item_metadata(enemy_picker.selected))
+		var door_id: String = str(door_picker.get_item_metadata(door_picker.selected))
+		if blocker_id == door_id:
+			status.text = "Choose two different objects for the blocker and door."
+			return
+		var blocker: Dictionary = _find_object(blocker_id)
+		var door: Dictionary = _find_object(door_id)
+		if blocker.is_empty() or door.is_empty(): return
+		var required_item: String = str(item_picker.get_item_metadata(item_picker.selected))
+		if not enemy_message.text.strip_edges().is_empty():
+			blocker["message"] = enemy_message.text
+		if not required_item.is_empty():
+			blocker["action"] = "use_item"
+			blocker["required"] = required_item
+			blocker["target"] = blocker_id
+			blocker["use_effect"] = 1
+			blocker["hp_change"] = -1
+			blocker["consume_item"] = false
+			blocker["post_use_message"] = post_message.text
+		door["blocked_by"] = blocker_id
+		door["blocked_message"] = blocked_message.text
+		if str(door.get("action", "")) not in ["go_to_room", "unlock"]:
+			door["action"] = "go_to_room"
+		_select(selected)
+		status.text = "Door blocker created. Set the door destination, then Save and Play / Test."
+	)
+	dialog.canceled.connect(func() -> void: dialog.queue_free())
+	dialog.confirmed.connect(func() -> void: dialog.queue_free(), CONNECT_DEFERRED)
+	dialog.popup_centered(Vector2i(580, 540))
+
+func _wizard_field(parent: VBoxContainer, caption: String, field: Control) -> void:
+	var label := Label.new()
+	label.text = caption
+	parent.add_child(label)
+	parent.add_child(field)
+
+func _refresh_target_options(current_target: String) -> void:
+	# The label is for students; the internal ID is stored as item metadata.
+	target_edit.clear()
+	target_edit.add_item("None")
+	target_edit.set_item_metadata(0, "")
+	var matching_index: int = 0
+	for entry in _items():
+		var object_id: String = str(entry.get("id", ""))
+		var object_name: String = str(entry.get("label", "Unnamed object"))
+		var index: int = target_edit.item_count
+		target_edit.add_item(object_name)
+		target_edit.set_item_metadata(index, object_id)
+		if object_id == current_target:
+			matching_index = index
+	if not current_target.is_empty() and matching_index == 0:
+		var missing_index: int = target_edit.item_count
+		target_edit.add_item("Missing object (" + current_target + ")")
+		target_edit.set_item_metadata(missing_index, current_target)
+		matching_index = missing_index
+	target_edit.select(matching_index)
+
+func _refresh_blocker_options(current_id: String) -> void:
+	blocker_edit.clear()
+	blocker_edit.add_item("None (door is not blocked)")
+	blocker_edit.set_item_metadata(0, "")
+	var match_index: int = 0
+	for entry in _items():
+		var object_id: String = str(entry.get("id", ""))
+		if selected >= 0 and selected < _items().size() and object_id == str(_items()[selected].get("id", "")):
+			continue
+		var index: int = blocker_edit.item_count
+		blocker_edit.add_item(str(entry.get("label", "Unnamed object")))
+		blocker_edit.set_item_metadata(index, object_id)
+		if object_id == current_id: match_index = index
+	if not current_id.is_empty() and match_index == 0:
+		var index: int = blocker_edit.item_count
+		blocker_edit.add_item("Missing object (" + current_id + ")")
+		blocker_edit.set_item_metadata(index, current_id)
+		match_index = index
+	blocker_edit.select(match_index)
+
+func _door_is_blocked(obj: Dictionary) -> bool:
+	var blocker_id: String = str(obj.get("blocked_by", ""))
+	if blocker_id.is_empty(): return false
+	if bool(state.get("collected_" + blocker_id, false)): return false
+	# A missing blocker should not permanently trap a player.
+	return not _find_object(blocker_id).is_empty()
 
 func _select(index: int) -> void:
 	if index < 0 or index >= _items().size(): return
@@ -789,7 +1144,7 @@ func _select(index: int) -> void:
 	y_edit.set_block_signals(true)
 	w_edit.set_block_signals(true)
 	h_edit.set_block_signals(true)
-	for widget in [action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker]:
+	for widget in [action_edit, target_edit, blocker_edit, blocked_message_edit, message_edit, post_use_message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker, use_effect_edit, consume_item_edit]:
 		widget.set_block_signals(true)
 	label_edit.text = str(o["label"])
 	x_edit.value = round(float(o["x"]) * 100.0)
@@ -800,16 +1155,21 @@ func _select(index: int) -> void:
 	var destination := str(o.get("destination_room", ""))
 	var destination_index := SharedData.room_names().find(destination) + 1 if SharedData.mode == "adventure" else 0
 	destination_picker.select(maxi(0, destination_index))
-	target_edit.text = str(o.get("target", ""))
+	_refresh_target_options(str(o.get("target", "")))
+	_refresh_blocker_options(str(o.get("blocked_by", "")))
+	blocked_message_edit.text = str(o.get("blocked_message", ""))
 	message_edit.text = str(o.get("message", ""))
+	post_use_message_edit.text = str(o.get("post_use_message", ""))
 	item_edit.text = str(o.get("item", ""))
 	required_edit.text = str(o.get("required", ""))
+	use_effect_edit.select(clampi(int(o.get("use_effect", 0)), 0, 3))
+	consume_item_edit.button_pressed = bool(o.get("consume_item", false))
 	password_edit.text = str(o.get("password", ""))
 	wrong_edit.text = str(o.get("wrong_message", "Incorrect password. Try again."))
 	damage_edit.value = int(o.get("hp_change", -int(o.get("damage", 0))))
 	damage_message_edit.text = str(o.get("damage_message", ""))
 	hidden_edit.button_pressed = bool(o.get("hidden", false))
-	for widget in [label_edit, x_edit, y_edit, w_edit, h_edit, action_edit, target_edit, message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker]:
+	for widget in [label_edit, x_edit, y_edit, w_edit, h_edit, action_edit, target_edit, blocker_edit, blocked_message_edit, message_edit, post_use_message_edit, item_edit, required_edit, password_edit, wrong_edit, hidden_edit, damage_edit, damage_message_edit, destination_picker, use_effect_edit, consume_item_edit]:
 		widget.set_block_signals(false)
 
 func _apply_properties() -> void:
@@ -822,10 +1182,15 @@ func _apply_properties() -> void:
 	o["h"] = h_edit.value
 	o["action"] = ACTIONS[action_edit.selected]
 	o["destination_room"] = destination_picker.get_item_text(destination_picker.selected) if destination_picker.selected > 0 else ""
-	o["target"] = target_edit.text
+	o["target"] = str(target_edit.get_item_metadata(target_edit.selected)) if target_edit.selected >= 0 else ""
+	o["blocked_by"] = str(blocker_edit.get_item_metadata(blocker_edit.selected)) if blocker_edit.selected >= 0 else ""
+	o["blocked_message"] = blocked_message_edit.text
 	o["message"] = message_edit.text
+	o["post_use_message"] = post_use_message_edit.text
 	o["item"] = item_edit.text
 	o["required"] = required_edit.text
+	o["use_effect"] = use_effect_edit.selected
+	o["consume_item"] = consume_item_edit.button_pressed
 	o["password"] = password_edit.text
 	o["wrong_message"] = wrong_edit.text
 	o["hp_change"] = int(damage_edit.value)
@@ -836,6 +1201,16 @@ func _apply_properties() -> void:
 	# Rebuilding called _select(), which reset the caret to position zero.
 	# Update only the selected object and its list label in place.
 	object_picker.set_item_text(selected, str(o["label"]))
+	# Keep target names in sync when students rename an object.
+	var target_id: String = str(o.get("target", ""))
+	var previous_selection: int = target_edit.selected
+	var previous_id: String = str(target_edit.get_item_metadata(previous_selection)) if previous_selection >= 0 else ""
+	_refresh_target_options(previous_id)
+	var previous_blocker: String = str(o.get("blocked_by", ""))
+	blocker_edit.set_block_signals(true)
+	_refresh_blocker_options(previous_blocker)
+	blocker_edit.set_block_signals(false)
+
 	if selected < objects_layer.get_child_count():
 		var visual: Control = objects_layer.get_child(selected)
 		var area_size := scene_area.size
@@ -911,6 +1286,8 @@ func _start_test() -> void:
 
 func _start_test_actual() -> void:
 	play_highlight_id = ""
+	pending_use_item_id = ""
+	if use_item_button != null: use_item_button.visible = false
 	if not SharedData.save():
 		status.text = "Save failed; starting test with unsaved changes."
 	testing = true
@@ -954,14 +1331,34 @@ func _update_inventory() -> void:
 	if testing and SharedData.mode == "adventure":
 		_update_hp_label()
 
-func _interact(id: String) -> void:
+func _use_selected_item() -> void:
+	if not testing or pending_use_item_id.is_empty(): return
+	var id := pending_use_item_id
+	pending_use_item_id = ""
+	use_item_button.visible = false
+	_interact(id, true)
+
+func _interact(id: String, applying_item: bool = false) -> void:
 	if not testing or won or restart_pending or SharedData.mode != "adventure": return
 	var obj := _find_object(id)
 	if obj.is_empty(): return
 	_play_item_sound(obj)
 	play_highlight_id = id
 	_refresh_object_highlights()
-	var hp_change := int(obj.get("hp_change", -int(obj.get("damage", 0))))
+	var action := str(obj.get("action", "inspect"))
+	pending_use_item_id = ""
+	if use_item_button != null: use_item_button.visible = false
+	if action == "use_item" and not applying_item:
+		var description := str(obj.get("message", "")).strip_edges()
+		if description.is_empty(): description = "You inspect the " + str(obj.get("label", "object")) + "."
+		var required_item := str(obj.get("required", "")).strip_edges()
+		if not required_item.is_empty() and state.get("items", []).has(required_item):
+			pending_use_item_id = id
+			use_item_button.text = "Use " + required_item
+			use_item_button.visible = true
+		play_dialogue.text = description
+		return
+	var hp_change := 0 if action == "use_item" else int(obj.get("hp_change", -int(obj.get("damage", 0))))
 	var damage := maxi(0, -hp_change)
 	var healed := 0
 	if hp_change > 0:
@@ -985,10 +1382,41 @@ func _interact(id: String) -> void:
 			_update_inventory()
 			get_tree().create_timer(2.0).timeout.connect(_restart_after_death)
 			return
-	var action := str(obj.get("action", "inspect"))
 	pending_password_id = ""
 	var message := str(obj.get("message", ""))
 	match action:
+		"use_item":
+			var required_name: String = str(obj.get("required", "")).strip_edges()
+			var inventory: Array = state.get("items", [])
+			if required_name.is_empty():
+				status.text = "Set Required item to the name of an inventory item."
+			elif not inventory.has(required_name):
+				status.text = message if not message.is_empty() else "You inspect the " + str(obj.get("label", "object")) + "."
+			else:
+				var effect: int = int(obj.get("use_effect", 0))
+				var target_id: String = str(obj.get("target", "")).strip_edges()
+				var target_obj: Dictionary = _find_object(target_id)
+				if effect != 0 and target_obj.is_empty():
+					status.text = "Choose a target object for this effect."
+				else:
+					match effect:
+						1:
+							var amount: int = absi(int(obj.get("hp_change", 0)))
+							if amount == 0: amount = 1
+							var target_hp: int = int(state.get("target_hp_" + target_id, target_obj.get("target_hp", 1)))
+							target_hp = maxi(0, target_hp - amount)
+							state["target_hp_" + target_id] = target_hp
+							if target_hp == 0: state["collected_" + target_id] = true
+						2:
+							state["revealed_" + target_id] = true
+						3:
+							state["collected_" + target_id] = true
+					if bool(obj.get("consume_item", false)):
+						inventory.erase(required_name)
+						state["items"] = inventory
+						shared_inventory = inventory
+					var post_use_message: String = str(obj.get("post_use_message", "")).strip_edges()
+					status.text = post_use_message if not post_use_message.is_empty() else "Used " + required_name + "."
 		"password":
 			pending_password_id = id
 			password_input.clear()
@@ -1002,7 +1430,7 @@ func _interact(id: String) -> void:
 		"reveal":
 			var target := str(obj.get("target", ""))
 			if _find_object(target).is_empty():
-				status.text = "Set a valid Target object ID in the editor."
+				status.text = "Select a target object in the editor."
 				return
 			state["revealed_" + target] = true
 			status.text = message if not message.is_empty() else "Something has appeared."
@@ -1017,6 +1445,10 @@ func _interact(id: String) -> void:
 			state["collected_" + id] = true
 			status.text = message if not message.is_empty() else "Collected: " + item_name
 		"go_to_room":
+			if _door_is_blocked(obj):
+				status.text = str(obj.get("blocked_message", "")) if not str(obj.get("blocked_message", "")).strip_edges().is_empty() else "The way is blocked."
+				play_dialogue.text = status.text
+				return
 			var destination := str(obj.get("destination_room", ""))
 			if SharedData.room_names().has(destination):
 				_sound("Door Opened")
@@ -1031,6 +1463,10 @@ func _interact(id: String) -> void:
 			status.text = message if not message.is_empty() else "You escaped!"
 			status.text += "  YOU WIN!"
 		"unlock":
+			if _door_is_blocked(obj):
+				status.text = str(obj.get("blocked_message", "")) if not str(obj.get("blocked_message", "")).strip_edges().is_empty() else "The way is blocked."
+				play_dialogue.text = status.text
+				return
 			var required := str(obj.get("required", ""))
 			var inventory: Array = state.get("items", [])
 			if not required.is_empty() and not inventory.has(required):
@@ -1085,7 +1521,7 @@ func _submit_password() -> void:
 	var target := str(obj.get("target", ""))
 	if not target.is_empty():
 		if _find_object(target).is_empty():
-			play_dialogue.text = "Set a valid Target object ID in the editor."
+			play_dialogue.text = "Select a target object in the editor."
 			return
 		state["revealed_" + target] = true
 	# A correct password does not automatically end the game.
