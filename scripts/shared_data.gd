@@ -16,10 +16,11 @@ func _ready() -> void:
 func reset_defaults() -> void:
 	scenes = {
 		"adventure": {"objects": [
-			{"id":"desk","label":"Desk","x":0.19,"y":0.61,"w":120,"h":100},
-			{"id":"drawer","label":"Drawer","x":0.36,"y":0.72,"w":75,"h":60},
-			{"id":"painting","label":"Painting","x":0.49,"y":0.24,"w":105,"h":105},
-			{"id":"door","label":"Door","x":0.80,"y":0.44,"w":115,"h":210}]},
+			{"id":"desk","label":"Desk","x":0.19,"y":0.61,"w":120,"h":100,"action":"inspect","message":"The desk has a small drawer."},
+			{"id":"drawer","label":"Drawer","x":0.36,"y":0.72,"w":75,"h":60,"action":"reveal","target":"key","message":"The drawer opens. A key is inside."},
+			{"id":"painting","label":"Painting","x":0.49,"y":0.24,"w":105,"h":105,"action":"swap","message":"Behind the painting: Check the desk drawer."},
+			{"id":"door","label":"Door","x":0.80,"y":0.44,"w":115,"h":210,"action":"unlock","required":"Brass key","message":"The door opens. You escaped!"},
+			{"id":"key","label":"Brass key","x":0.37,"y":0.70,"w":40,"h":35,"action":"collect","item":"Brass key","hidden":true,"message":"You picked up the brass key."}]},
 		"racing": {"objects": [
 			{"id":"car","label":"Player car","x":0.49,"y":0.79,"w":55,"h":90},
 			{"id":"obstacle","label":"Obstacle","x":0.53,"y":0.30,"w":55,"h":65}]},
@@ -54,3 +55,11 @@ func import_image(slot: String, path: String) -> bool:
 	var image := Image.new()
 	if image.load(path) != OK: return false
 	return image.save_png(image_path(slot)) == OK
+
+func reset_mode() -> void:
+	var current := mode
+	var saved := scenes.duplicate(true)
+	reset_defaults()
+	var default_scene: Dictionary = scenes[current].duplicate(true)
+	scenes = saved
+	scenes[current] = default_scene

@@ -1,0 +1,1 @@
+In Edit Scene, scroll to APPEARANCE (Play Mode). Enter colours as hex values such as #FFFFFF. Change dialogue and inventory colours/font sizes and background tint. Save the scene to retain choices. Reset appearance restores default appearance only. Existing object images, placement and interactions are unchanged.
