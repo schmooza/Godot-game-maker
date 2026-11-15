@@ -1,0 +1,1 @@
+Racing: click SET start position (click road), then click a road location. The start/finish point is saved separately for each track. The car respawns there on Play / Test and Restart, oriented along the road. Checkpoints must not overlap the start sensor.

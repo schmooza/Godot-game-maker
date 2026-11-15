@@ -7,10 +7,13 @@ func _draw() -> void:
 	var angle: float = c.car_angle
 	if c.car_texture != null:
 		var source_size: Vector2 = c.car_texture.get_size()
-		# Car body is a portrait rectangle: front at the short top edge.
-		# Draw into a consistent 1:1.7 body shape, regardless of source PNG ratio.
-		var sprite_size := Vector2(c.car_sprite_width, c.car_sprite_width * 1.7)
-		draw_set_transform(pos * scale_factor, angle, Vector2.ONE * scale_factor)
+		# Preserve the source aspect ratio. Scale the long axis to car length;
+		# the student chooses which edge is the front, without reimporting.
+		var long_edge: float = c.car_sprite_width * 1.7
+		var factor: float = long_edge / maxf(source_size.x, source_size.y)
+		var sprite_size: Vector2 = source_size * factor
+		# Rotate the PNG's chosen front edge to face local UP, then steer.
+		draw_set_transform(pos * scale_factor, angle + c._car_front_rotation(), Vector2.ONE * scale_factor)
 		draw_texture_rect(c.car_texture, Rect2(-sprite_size * 0.5, sprite_size), false)
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	else:
