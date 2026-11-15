@@ -1,0 +1,1 @@
+Import car sprite in Racing mode. Choose a PNG (transparent background recommended), with the front of the car facing the top of the image. The game scales it to fit within 20 x 30 pixels, rotates it with steering, and saves it locally. The original red triangle is used until a sprite is imported.

@@ -1,0 +1,1 @@
+Car sprites are displayed as a portrait rectangle, 1.7 times as long as wide. The front is the short top edge. Landscape PNGs are rotated 90 degrees counterclockwise at import (front assumed on the right). Transparent padding is trimmed. Reimport existing sprites for automatic orientation. The red default car is also rectangular.
