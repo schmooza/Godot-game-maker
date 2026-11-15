@@ -59,6 +59,11 @@ func _ready() -> void:
 			note.add_theme_stylebox_override(state,style)
 		note.pressed.connect(_open.bind(str(entry["id"])))
 		grid.add_child(note)
+	var capstone_button := Button.new()
+	capstone_button.text = "CAPSTONE - Game Flow Editor"
+	capstone_button.custom_minimum_size = Vector2(340, 55)
+	layout.add_child(capstone_button)
+	capstone_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/capstone_flow.tscn"))
 	var transfer_row := HBoxContainer.new()
 	transfer_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	transfer_row.add_theme_constant_override("separation",16)

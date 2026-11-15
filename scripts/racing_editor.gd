@@ -13,6 +13,7 @@ var track_library: Array = []
 var active_track_id := ""
 var track_selector: OptionButton
 var track_name_input: LineEdit
+var track_name_heading: Label
 var delete_track_dialog: ConfirmationDialog
 var delete_track_id := ""
 var switching_tracks := false
@@ -289,6 +290,10 @@ func _build() -> void:
 	_button(toolbar, "Save Track", _save_track_button)
 	_button(toolbar, "Play / Test", _start)
 	_button(toolbar, "Restart", _start)
+	track_name_heading = Label.new()
+	track_name_heading.text = "RACING: Saved Track"
+	track_name_heading.add_theme_font_size_override("font_size", 23)
+	root.add_child(track_name_heading)
 	var content := HBoxContainer.new()
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(content)
@@ -969,6 +974,16 @@ func _rename_selected_track() -> void:
 			status.text = "Track renamed to: " + new_name
 			return
 
+func _update_track_name_heading() -> void:
+	if track_name_heading == null:
+		return
+	var title: String = "Unnamed Track"
+	for entry in track_library:
+		if str(entry.get("id", "")) == active_track_id:
+			title = str(entry.get("name", title))
+			break
+	track_name_heading.text = "RACING: " + title
+
 func _refresh_track_selector() -> void:
 	if track_selector == null:
 		return
@@ -984,6 +999,8 @@ func _refresh_track_selector() -> void:
 			if track_name_input != null:
 				track_name_input.text = str(item.get("name", "Track " + str(i + 1)))
 	switching_tracks = false
+
+	_update_track_name_heading()
 
 func _on_sensor_radius_changed(value: float) -> void:
 	lap_sensor_radius = value

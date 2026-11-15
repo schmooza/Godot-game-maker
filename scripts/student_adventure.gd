@@ -6,6 +6,8 @@ var heading: Label
 var message: Label
 var inventory: HBoxContainer
 var won := false
+var collected_custom: Dictionary = {}
+const CUSTOM_OBJECTS_PATH := "user://adventure_custom_objects.json"
 
 func _ready() -> void:
 	if EditorState.active_rules == null:
@@ -81,6 +83,8 @@ func _refresh() -> void:
 			button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 			button.pressed.connect(func(): _interact(object_id))
 			object_grid.add_child(button)
+	if not won:
+		_add_custom_objects()
 	var label := Label.new()
 	label.text = "Inventory: " + str(state.get("items", []))
 	inventory.add_child(label)
@@ -93,6 +97,42 @@ func _refresh() -> void:
 			key_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			key_image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			inventory.add_child(key_image)
+
+func _add_custom_objects() -> void:
+	if not FileAccess.file_exists(CUSTOM_OBJECTS_PATH):
+		return
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(CUSTOM_OBJECTS_PATH))
+	if not (data is Array):
+		return
+	for entry in data:
+		if not (entry is Dictionary):
+			continue
+		var obj: Dictionary = entry
+		var object_id: String = str(obj.get("id", ""))
+		if collected_custom.has(object_id):
+			continue
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(180, 130)
+		button.text = str(obj.get("name", "Object"))
+		var image_path: String = str(obj.get("image", ""))
+		if not image_path.is_empty() and FileAccess.file_exists(image_path):
+			var img := Image.new()
+			if img.load(image_path) == OK:
+				button.icon = ImageTexture.create_from_image(img)
+				button.expand_icon = true
+				button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+		button.pressed.connect(func(): _interact_custom(obj))
+		object_grid.add_child(button)
+
+func _interact_custom(obj: Dictionary) -> void:
+	message.text = str(obj.get("description", "You examine the object."))
+	if bool(obj.get("collect", false)):
+		var items: Array = state.get("items", [])
+		items.append(str(obj.get("name", "Object")))
+		state["items"] = items
+		collected_custom[str(obj.get("id", ""))] = true
+		_refresh()
 
 func _interact(object_id: String) -> void:
 	var result: Variant = EditorState.active_rules.call("interact", object_id, state.duplicate(true))
@@ -112,6 +152,7 @@ func _interact(object_id: String) -> void:
 
 func _restart() -> void:
 	state.clear()
+	collected_custom.clear()
 	won = false
 	message.text = "Click an object to investigate."
 	_refresh()

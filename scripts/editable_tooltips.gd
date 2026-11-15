@@ -58,6 +58,76 @@ func refresh() -> void:
 		if panel != null:
 			_register_tree(panel, "sidebar", counts)
 
+func _explain_control(label_text: String, control: Control) -> String:
+	var name: String = label_text.strip_edges().to_lower()
+	var descriptions: Dictionary = {
+		"save": "Save your current changes so they remain when you leave this editor.",
+		"play / test": "Run the current game to test objects, interactions and win conditions. Save your changes first.",
+		"edit scene": "Open the visual room editor to position objects and change their interactions.",
+		"edit adventure code": "Open the editable Adventure rules/code. Changes may affect how the game plays.",
+		"add room": "Create another Adventure room. Give it a unique name so doors can lead to it.",
+		"add object": "Place a new object in this room. Select it to set its name, image and click action.",
+		"add object ": "Place a new object in this room. Select it to set its name, image and click action.",
+		"remove selected": "Delete the currently selected object from this room.",
+		"import selected image": "Choose an image for the selected object. The image appears in the room.",
+		"object name": "Name shown on the object in the room and to the player.",
+		"on click (adventure)": "Choose what happens when the player clicks this object: inspect, collect, unlock, change rooms and more.",
+		"target object id": "ID of another object that this action affects, such as an object to reveal or change.",
+		"message": "Text shown to the player when they interact with this object.",
+		"inventory item": "Item added to, or required from, the player's inventory by this interaction.",
+		"destination room (go to room / unlock)": "Room to enter when this door or unlock action succeeds.",
+		"password (adventure password action)": "Password the player must enter to activate this object.",
+		"hp change on click (+ heals, - damages, 0 = none)": "Positive numbers heal the player; negative numbers cause damage; zero leaves health unchanged.",
+		"damage explanation (shown to player)": "Message explaining why the player lost health.",
+		"starting hp": "Health points the player has at the beginning of the Adventure.",
+		"incorrect password message": "Text displayed after a player enters the wrong password.",
+		"hidden until revealed": "Hide this object during play until another interaction reveals it.",
+		"new room name (e.g. room 2)": "Enter a unique name for the room you are about to create.",
+		"edit tooltips": "Turn on tooltip editing, then click a control to customise its explanation.",
+		"done editing tooltips": "Finish editing explanations and return to normal controls.",
+		"rename": "Apply the name you entered to the selected game, room or stage.",
+		"save name": "Save the overall game name so it can be identified in Capstone Mode.",
+		"home": "Return to the main game selection menu.",
+		"← games": "Return to the game selection menu.",
+		"back": "Return to the previous screen. Save first if you want to keep changes.",
+		"change type": "Change which of the three game types this Capstone stage uses.",
+		"save flow": "Save stage names, links, positions and the starting stage.",
+		"play flow": "Start playing the connected Capstone stages from the selected starting stage.",
+		"test flow": "Preview the connections between Capstone stages.",
+		"set start": "Make the selected stage the first stage of the Capstone game.",
+		"open game editor": "Open the original editor for this stage's game type.",
+		"link selected game": "Attach the chosen saved game to this Capstone stage.",
+		"refresh saved games": "Reload the list of games saved in the three editors.",
+		"delete selected": "Remove the selected stage or item. This cannot be undone.",
+		"save track": "Save the track layout, hazards, checkpoints and settings.",
+		"rename track": "Save a new name for the selected racing track.",
+		"new blank track": "Create an empty track for drawing roads and placing checkpoints.",
+		"delete selected track": "Permanently remove the selected saved racing track after confirmation.",
+	}
+	if descriptions.has(name):
+		return str(descriptions[name])
+	if name.contains("checkpoint"):
+		return "Place or adjust a checkpoint the car must pass to complete a lap."
+	if name.contains("water"):
+		return "Edit water hazards. The car must jump to cross them safely."
+	if name.contains("spike"):
+		return "Edit spike hazards and their up/down timing."
+	if name.contains("jump"):
+		return "Change how the car jumps, including its key or time in the air."
+	if name.contains("wave"):
+		return "Edit or select a boss attack wave. A boss fight can have one or more waves."
+	if name.contains("boss"):
+		return "Configure the boss fight, including its attacks and settings."
+	if control is LineEdit:
+		return "Type a value for " + label_text + ". Save to keep the change."
+	if control is OptionButton:
+		return "Choose an option for " + label_text + "."
+	if control is SpinBox:
+		return "Adjust this numeric setting."
+	if control is BaseButton:
+		return "Use " + label_text + " to change the current game or editor."
+	return "Configure " + label_text + " for this game."
+
 func _register_tree(node: Node, area: String, counts: Dictionary) -> void:
 	for child in node.get_children():
 		if child == toggle or child == dialog:
@@ -88,8 +158,8 @@ func _register_tree(node: Node, area: String, counts: Dictionary) -> void:
 			var key: String = base + "/" + str(ordinal)
 			targets[control] = key
 			var default_tip: String = control.tooltip_text
-			if default_tip.is_empty():
-				default_tip = "Click to use " + label_text + "." if control is BaseButton else "Adjust " + label_text + " for this game."
+			if default_tip.is_empty() or default_tip.begins_with("Click to use ") or default_tip.begins_with("Adjust "):
+				default_tip = _explain_control(label_text, control)
 			if not defaults.has(key):
 				defaults[key] = default_tip
 			control.tooltip_text = str(custom.get(key, defaults[key]))

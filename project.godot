@@ -23,6 +23,7 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 EditorState="*res://scripts/editor_state.gd"
 AssetStore="*res://scripts/asset_store.gd"
 SharedData="*res://scripts/shared_data.gd"
+CapstoneRunner="*res://scripts/capstone_runner.gd"
 
 [display]
 

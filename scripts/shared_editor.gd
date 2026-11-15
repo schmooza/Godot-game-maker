@@ -747,7 +747,8 @@ func _rebuild() -> void:
 			if testing:
 				fallback.pressed.connect(_interact.bind(str(item["id"])))
 			else:
-				fallback.pressed.connect(_select_with_sound.bind(i))
+				# Text-only custom objects must receive drag events too.
+				fallback.gui_input.connect(_drag_input.bind(i))
 			objects_layer.add_child(fallback)
 			b.queue_free()
 		else:

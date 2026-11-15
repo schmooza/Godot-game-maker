@@ -30,7 +30,8 @@ func setup(host: Control, output: Label) -> void:
 	import_mode.add_item("Adventure only")
 	import_mode.add_item("Racing only")
 	import_mode.add_item("Bullet Hell only")
-	import_mode.item_selected.connect(func(i: int): import_scope = ["all","adventure","racing","boss"][i])
+	import_mode.add_item("Capstone flow only")
+	import_mode.item_selected.connect(func(i: int): import_scope = ["all","adventure","racing","boss","capstone"][i])
 	# Scope picker is part of the import confirmation, not a persistent game setting.
 	confirmation = ConfirmationDialog.new()
 	confirmation.title = "Replace saved project data?"
@@ -60,13 +61,16 @@ func _export(path: String) -> void:
 	if zipper.open(path) != OK:
 		status.text = "Export failed: cannot create ZIP."
 		return
-	var manifest := JSON.stringify({"app":"postit-game-engine","format":1})
+	var manifest := JSON.stringify({"app":"postit-game-engine","format":1,"capstone_flow":"data/capstone_flow.json" if FileAccess.file_exists("user://capstone_flow.json") else ""})
 	zipper.start_file(MANIFEST)
 	zipper.write_file(manifest.to_utf8_buffer())
 	zipper.close_file()
 	var root := ProjectSettings.globalize_path("user://")
 	var paths: Array[String] = []
 	_collect(root,"",paths)
+	# Explicitly preserve the saved Capstone graph (nodes, links and start).
+	if FileAccess.file_exists("user://capstone_flow.json") and not paths.has("capstone_flow.json"):
+		paths.append("capstone_flow.json")
 	for relative in paths:
 		var absolute := root.path_join(relative)
 		var content := FileAccess.get_file_as_bytes(absolute)
@@ -74,7 +78,7 @@ func _export(path: String) -> void:
 			zipper.write_file(content)
 			zipper.close_file()
 	zipper.close()
-	status.text = "Exported " + str(paths.size()) + " saved files to " + path.get_file()
+	status.text = "Exported " + str(paths.size()) + " saved files to " + path.get_file() + (" (Capstone flow included)" if paths.has("capstone_flow.json") else " (no saved Capstone flow yet)")
 
 func _collect(root: String, relative: String, results: Array[String]) -> void:
 	var folder := root.path_join(relative)
@@ -115,6 +119,8 @@ func _belongs_to_scope(relative: String) -> bool:
 	if import_scope == "all":
 		return true
 	var filename := relative.get_file()
+	if import_scope == "capstone":
+		return relative == "capstone_flow.json"
 	if import_scope == "adventure":
 		return filename.begins_with("adventure_") or filename.begins_with("intro_adventure") or filename.begins_with("intro_sound_adventure") or filename.begins_with("audio_adventure") or filename.begins_with("item_sound_") or filename == "student_adventure.gd" or relative.begins_with("adventure_images/") or filename == "shared_scenes.json" or filename.begins_with("shared_")
 	if import_scope == "racing":

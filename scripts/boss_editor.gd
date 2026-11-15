@@ -41,6 +41,9 @@ var import_kind := ""
 var sprites: Dictionary = {}
 var patterns: Dictionary = {}
 var background_texture: Texture2D
+var boss_game_name: String = "Boss Fight 1"
+var boss_game_name_input: LineEdit
+var boss_game_heading: Label
 var wave_name: LineEdit
 var wave_duration: SpinBox
 var wave_angle: SpinBox
@@ -205,6 +208,20 @@ func _build() -> void:
 	bar.add_child(tip_toggle)
 	# Keep this switch operable in tooltip-edit mode; do not register its click as an editable item.
 	tip_toggle.tooltip_text = "Turn tooltip editing on or off. Hover over menu items to read saved tooltips."
+	var name_bar := HBoxContainer.new()
+	root.add_child(name_bar)
+	boss_game_heading = Label.new()
+	boss_game_heading.text = "BOSS FIGHT: " + boss_game_name
+	boss_game_heading.add_theme_font_size_override("font_size", 23)
+	boss_game_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_bar.add_child(boss_game_heading)
+	boss_game_name_input = LineEdit.new()
+	boss_game_name_input.text = boss_game_name
+	boss_game_name_input.placeholder_text = "Overall boss fight name"
+	boss_game_name_input.custom_minimum_size.x = 230
+	name_bar.add_child(boss_game_name_input)
+	_button(name_bar, "Save Name", _save_boss_game_name)
+	boss_game_name_input.text_submitted.connect(func(_value: String): _save_boss_game_name())
 	var content := HBoxContainer.new()
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(content)
@@ -517,11 +534,22 @@ func _read_texture(kind: String) -> Texture2D:
 		return ImageTexture.create_from_image(img)
 	return null
 
+func _save_boss_game_name() -> void:
+	if boss_game_name_input == null:
+		return
+	var proposed: String = boss_game_name_input.text.strip_edges()
+	if proposed.is_empty():
+		return
+	boss_game_name = proposed
+	boss_game_heading.text = "BOSS FIGHT: " + boss_game_name
+	_save()
+
 func _load() -> void:
 	if FileAccess.file_exists(SAVE_PATH):
 		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH))
 		if parsed is Dictionary:
 			var saved: Dictionary = parsed
+			boss_game_name = str(saved.get("game_name", "Boss Fight 1"))
 			if saved.get("settings",{}) is Dictionary:
 				for key in cfg:
 					if saved["settings"].has(key):
@@ -538,7 +566,7 @@ func _load() -> void:
 func _save() -> void:
 	var f := FileAccess.open(SAVE_PATH,FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"settings":cfg,"waves":waves}))
+		f.store_string(JSON.stringify({"game_name":boss_game_name,"settings":cfg,"waves":waves}))
 		f.close()
 
 func _reset() -> void:
