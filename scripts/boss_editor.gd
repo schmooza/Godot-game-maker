@@ -1,4 +1,6 @@
 extends Control
+var optional_audio: Node
+var game_intro: Node
 const SAVE_PATH := "user://boss_fight_settings_v2.json"
 const ARENA := Vector2(850, 560)
 const STATES := ["full", "half", "near", "dead"]
@@ -75,6 +77,8 @@ func _ready() -> void:
 	_load_tooltips()
 	_load_images()
 	_build()
+	_install_optional_audio()
+	_install_game_intro()
 	_reset()
 	set_process(true)
 
@@ -157,6 +161,29 @@ func _power_controls(parent: Node, title: String, key: String, effect_label: Str
 	if timed:
 		_setting(parent, title + " duration (seconds)", "power_"+key+"_duration", 1, 60, 0.5)
 
+func _install_optional_audio() -> void:
+	var sidebar: Node = find_child("SoundSidebar",true,false)
+	if sidebar == null:
+		return
+	optional_audio = load("res://scripts/optional_audio.gd").new()
+	add_child(optional_audio)
+	var sound_events: Array[String] = ["Background Music", "Player Shooting", "Boss Shooting", "Damage", "Power-up Collected", "Victory", "Defeat"]
+	optional_audio.setup(self,sidebar,"boss",sound_events)
+
+func _install_game_intro() -> void:
+	var sidebar: Node = find_child("SoundSidebar",true,false)
+	if sidebar == null:
+		return
+	if sidebar is ScrollContainer and sidebar.get_child_count() > 0:
+		sidebar = sidebar.get_child(0)
+	game_intro = load("res://scripts/game_intro.gd").new()
+	add_child(game_intro)
+	game_intro.setup(self,sidebar,"boss","Bullet Hell Boss","Dodge incoming bullets, collect power-ups and defeat the boss!")
+
+func _sound(event_name: String) -> void:
+	if optional_audio != null:
+		optional_audio.play(event_name)
+
 func _build() -> void:
 	var root := VBoxContainer.new()
 	add_child(root)
@@ -182,6 +209,7 @@ func _build() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	content.add_child(scroll)
 	var left := VBoxContainer.new()
+	left.name = "SoundSidebar"
 	left.custom_minimum_size.x = 308
 	scroll.add_child(left)
 	_section(left, "BOSS & PLAYER SETTINGS", Color("#268bd2"))
@@ -544,10 +572,17 @@ func _edit() -> void:
 	status.text = "EDIT BOSS: configure wave sequence, sprites and power-ups."
 
 func _start() -> void:
+	if game_intro != null:
+		game_intro.show_intro(Callable(self,"_start_actual"))
+	else:
+		_start_actual()
+
+func _start_actual() -> void:
 	get_viewport().gui_release_focus()
 	_reset()
 	playing = true
 	status.text = "BOSS FIGHT: WASD to move; SPACE to shoot."
+	_sound("Background Music")
 
 func _preview_wave() -> void:
 	_reset()
@@ -641,6 +676,9 @@ func _finish(win: bool) -> void:
 	result_text = str(cfg["win_message"] if win else cfg["lose_message"])
 	message.text = result_text
 	status.text = "Boss defeated. Restart or return to Games." if win else "Player defeated. Restart to try again."
+	if optional_audio != null:
+		optional_audio.stop_all()
+	_sound("Victory" if win else "Defeat")
 	bullets.clear()
 	shots.clear()
 
@@ -659,6 +697,7 @@ func _spawn_wave() -> void:
 	var angle := deg_to_rad(float(w["angle"]))
 	var velocity := Vector2.RIGHT.rotated(angle)*float(w["speed"])+Vector2(float(w.get("velocity_x",0)),float(w.get("velocity_y",0)))
 	var spawn := boss_pos+Vector2(float(w["offset_x"]),float(w["offset_y"]))
+	_sound("Boss Shooting")
 	for offset in origins:
 		var spread_vector: Vector2 = offset.normalized()*float(w.get("spread",0))
 		bullets.append({"pos":spawn+offset,"vel":velocity+spread_vector,"age":0.0,"life":float(w["lifetime"]),"fade":float(w["fade"]),"acceleration":float(w.get("acceleration",0)),"rotation":deg_to_rad(float(w.get("rotation",0))),"max_speed":float(w.get("max_speed",0)),"origin":spawn,"radial":offset})
@@ -680,6 +719,7 @@ func _spawn_powerup() -> void:
 	powerups.append({"pos":Vector2(randf_range(40,ARENA.x-40),randf_range(ARENA.y*0.35,ARENA.y-45)),"kind":kind,"age":0.0})
 
 func _collect_powerup(kind: String) -> void:
+	_sound("Power-up Collected")
 	match kind:
 		"Health":
 			hp = mini(int(cfg["player_hp"]),hp+maxi(1,roundi(float(cfg["player_hp"])*float(cfg["power_health_restore"])/100.0)))
@@ -749,6 +789,7 @@ func _process(delta: float) -> void:
 	shoot_timer -= delta
 	if not preview_mode and Input.is_physical_key_pressed(KEY_SPACE) and shoot_timer<=0:
 		shoot_timer = float(cfg["shot_interval"])/(float(cfg["power_rapid_multiplier"]) if rapid_timer>0 else 1.0)
+		_sound("Player Shooting")
 		shots.append({"pos":player_pos+Vector2(0,-24),"damage":maxi(1,roundi(float(cfg["shot_damage"])*(float(cfg["power_damage_multiplier"]) if damage_timer>0 else 1.0)))})
 	if not waves.is_empty():
 		var wave: Dictionary = waves[active_wave]
@@ -807,6 +848,8 @@ func _process(delta: float) -> void:
 			if shield_timer > 0:
 				damage = maxi(0,roundi(float(damage)*(1.0-shield_protection/100.0)))
 			hp = maxi(0,hp-damage)
+			if damage > 0:
+				_sound("Damage")
 			invulnerable = 0.65
 			if hp==0:
 				_finish(false)

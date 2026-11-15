@@ -1,4 +1,9 @@
 extends Control
+var optional_audio: Node
+var game_intro: Node
+var item_audio_editor: Node
+var item_audio_players: Array[AudioStreamPlayer] = []
+var editable_tooltips: Node
 ## Shared student-facing scene editor and test mode for all three game templates.
 const VIEW_SIZE := Vector2(960, 540)
 var testing := false
@@ -136,6 +141,10 @@ func _organise_editor_sections(left: VBoxContainer, instruction: Label, picker: 
 func _ready() -> void:
 	_build()
 	_rebuild()
+	_install_editable_tooltips()
+	_install_optional_audio()
+	_install_game_intro()
+	_install_item_audio()
 	set_process(true)
 
 func _button(parent: Node, caption: String, callback: Callable) -> Button:
@@ -145,28 +154,103 @@ func _button(parent: Node, caption: String, callback: Callable) -> Button:
 	parent.add_child(b)
 	return b
 
+func _install_editable_tooltips() -> void:
+	var toolbar_row: HBoxContainer = find_child("TooltipToolbar",true,false) as HBoxContainer
+	if toolbar_row == null:
+		return
+	editable_tooltips = load("res://scripts/editable_tooltips.gd").new()
+	add_child(editable_tooltips)
+	editable_tooltips.setup(self,toolbar_row,"adventure")
+
+func _install_optional_audio() -> void:
+	var sidebar: Node = find_child("TooltipScanSidebar",true,false)
+	if sidebar == null:
+		return
+	# ScrollContainer must have a single content child.
+	if sidebar is ScrollContainer and sidebar.get_child_count() > 0:
+		sidebar = sidebar.get_child(0)
+	optional_audio = load("res://scripts/optional_audio.gd").new()
+	add_child(optional_audio)
+	var sound_events: Array[String] = ["Background Music", "Item Collected", "Door Opened", "Door Locked", "Dialogue", "Damage", "Victory", "Defeat"]
+	optional_audio.setup(self,sidebar,"adventure",sound_events)
+
+func _install_item_audio() -> void:
+	var sidebar: Node = find_child("TooltipScanSidebar",true,false)
+	if sidebar == null:
+		return
+	if sidebar is ScrollContainer and sidebar.get_child_count() > 0:
+		sidebar = sidebar.get_child(0)
+	item_audio_editor = load("res://scripts/item_audio_editor.gd").new()
+	add_child(item_audio_editor)
+	item_audio_editor.setup(self,sidebar)
+	item_audio_editor.sound_changed.connect(_on_item_sound_changed)
+	_sync_item_audio()
+
+func _sync_item_audio() -> void:
+	if item_audio_editor == null:
+		return
+	if selected < 0 or selected >= _items().size():
+		item_audio_editor.set_item("","")
+		return
+	var item: Dictionary = _items()[selected]
+	item_audio_editor.set_item(str(item.get("id","")),str(item.get("custom_sound","")))
+
+func _on_item_sound_changed(item_id: String, sound_path: String) -> void:
+	for item in _items():
+		if str(item.get("id","")) == item_id:
+			item["custom_sound"] = sound_path
+			_save()
+			return
+
+func _play_item_sound(item: Dictionary) -> void:
+	var path := str(item.get("custom_sound",""))
+	if path.is_empty():
+		return
+	var stream: AudioStream = preload("res://scripts/item_audio_editor.gd").load_audio(path)
+	if stream == null:
+		return
+	var player := AudioStreamPlayer.new()
+	add_child(player)
+	player.stream = stream
+	player.finished.connect(func():
+		item_audio_players.erase(player)
+		player.queue_free())
+	item_audio_players.append(player)
+	player.play()
+
+func _install_game_intro() -> void:
+	var sidebar: Node = find_child("TooltipScanSidebar",true,false)
+	if sidebar == null:
+		return
+	if sidebar is ScrollContainer and sidebar.get_child_count() > 0:
+		sidebar = sidebar.get_child(0)
+	game_intro = load("res://scripts/game_intro.gd").new()
+	add_child(game_intro)
+	game_intro.setup(self,sidebar,"adventure","Adventure","Explore the rooms, find useful items, solve puzzles and escape!")
+
+func _sound(event_name: String) -> void:
+	if optional_audio != null:
+		optional_audio.play(event_name)
+
 func _build() -> void:
 	var base := VBoxContainer.new()
 	base.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	base.add_theme_constant_override("separation", 5)
 	add_child(base)
 	var toolbar := HBoxContainer.new()
+	toolbar.name = "TooltipToolbar"
 	base.add_child(toolbar)
 	mode_banner = Label.new()
 	mode_banner.text = "EDIT MODE — Arrange your scene"
 	mode_banner.add_theme_font_size_override("font_size", 22)
 	base.add_child(mode_banner)
 	_button(toolbar, "← Games", func(): get_tree().change_scene_to_file("res://scenes/main.tscn"))
-	var mode_picker := OptionButton.new()
-	for m in SharedData.MODES:
-		mode_picker.add_item({"adventure":"Adventure","racing":"Car racing","boss":"Boss fight"}[m])
-	mode_picker.select(SharedData.MODES.find(SharedData.mode))
-	mode_picker.item_selected.connect(func(index: int): SharedData.mode = SharedData.MODES[index]; testing = false; get_tree().change_scene_to_file("res://scenes/racing_editor.tscn") if SharedData.mode == "racing" else _rebuild())
-	toolbar.add_child(mode_picker)
+	# This editor is Adventure only. Racing and Boss have dedicated editors.
+	# Never expose the legacy shared Boss mode (placeholder graphics/no dedicated controls).
+	SharedData.mode = "adventure"
 	_button(toolbar, "Save", _save)
 	_button(toolbar, "Play / Test", _start_test)
 	_button(toolbar, "Edit Scene", func(): testing = false; _rebuild())
-	_button(toolbar, "Reset Scene", _reset_scene)
 	_button(toolbar, "Edit Adventure Code", func(): get_tree().change_scene_to_file("res://scenes/adventure_editor.tscn"))
 
 	main_row = HBoxContainer.new()
@@ -174,6 +258,7 @@ func _build() -> void:
 	base.add_child(main_row)
 	var row := main_row
 	editor_panel = ScrollContainer.new()
+	editor_panel.name = "TooltipScanSidebar"
 	editor_panel.custom_minimum_size.x = 280
 	editor_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	editor_panel.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -603,6 +688,8 @@ func _refresh_object_highlights() -> void:
 		_mark_visual(control, active, testing)
 
 func _rebuild() -> void:
+	if editable_tooltips != null:
+		editable_tooltips.call_deferred("refresh")
 	_refresh_room_controls()
 	_sync_appearance_inputs()
 	_apply_appearance()
@@ -660,7 +747,7 @@ func _rebuild() -> void:
 			if testing:
 				fallback.pressed.connect(_interact.bind(str(item["id"])))
 			else:
-				fallback.pressed.connect(_select.bind(i))
+				fallback.pressed.connect(_select_with_sound.bind(i))
 			objects_layer.add_child(fallback)
 			b.queue_free()
 		else:
@@ -695,6 +782,7 @@ func _select(index: int) -> void:
 	_refresh_object_highlights()
 	object_picker.select(index)
 	var o: Dictionary = _items()[index]
+	_sync_item_audio()
 	label_edit.set_block_signals(true)
 	x_edit.set_block_signals(true)
 	y_edit.set_block_signals(true)
@@ -753,12 +841,17 @@ func _apply_properties() -> void:
 		visual.size = Vector2(float(o["w"]), float(o["h"])) * minf(area_size.x / 960.0, area_size.y / 540.0)
 		visual.tooltip_text = str(o["label"])
 
+func _select_with_sound(index: int) -> void:
+	_select(index)
+	if index >= 0 and index < _items().size():
+		_play_item_sound(_items()[index])
+
 func _drag_input(event: InputEvent, index: int) -> void:
 	if testing: return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
-				_select(index)
+				_select_with_sound(index)
 				drag_index = index
 				drag_offset = get_global_mouse_position() - objects_layer.get_child(index).global_position
 			else:
@@ -809,10 +902,17 @@ func _reset_scene() -> void:
 	_rebuild()
 
 func _start_test() -> void:
+	if game_intro != null:
+		game_intro.show_intro(Callable(self,"_start_test_actual"))
+	else:
+		_start_test_actual()
+
+func _start_test_actual() -> void:
 	play_highlight_id = ""
 	if not SharedData.save():
 		status.text = "Save failed; starting test with unsaved changes."
 	testing = true
+	_sound("Background Music")
 	state.clear()
 	room_states.clear()
 	shared_inventory.clear()
@@ -856,6 +956,7 @@ func _interact(id: String) -> void:
 	if not testing or won or restart_pending or SharedData.mode != "adventure": return
 	var obj := _find_object(id)
 	if obj.is_empty(): return
+	_play_item_sound(obj)
 	play_highlight_id = id
 	_refresh_object_highlights()
 	var damage := maxi(0, int(obj.get("damage", 0)))
@@ -863,11 +964,13 @@ func _interact(id: String) -> void:
 	if damage > 0 and damage_explanation.is_empty():
 		damage_explanation = "The " + str(obj.get("label", "object")) + " hurt you!"
 	if damage > 0:
+		_sound("Damage")
 		current_hp = maxi(0, current_hp - damage)
 		_update_hp_label()
 		if current_hp == 0:
 			pending_password_id = ""
 			restart_pending = true
+			_sound("Defeat")
 			status.text = damage_explanation + "  (-" + str(damage) + " HP)\nHP: 0. GAME OVER! Restarting..."
 			play_dialogue.text = status.text
 			_update_inventory()
@@ -882,6 +985,7 @@ func _interact(id: String) -> void:
 			password_input.clear()
 			status.text = "Enter the password for " + str(obj.get("label", "object")) + "."
 		"inspect":
+			_sound("Dialogue")
 			status.text = message if not message.is_empty() else "You inspect the " + str(obj["label"]) + "."
 		"swap":
 			state["swapped_" + id] = not bool(state.get("swapped_" + id, false))
@@ -894,6 +998,7 @@ func _interact(id: String) -> void:
 			state["revealed_" + target] = true
 			status.text = message if not message.is_empty() else "Something has appeared."
 		"collect":
+			_sound("Item Collected")
 			var item_name := str(obj.get("item", str(obj["label"])))
 			if item_name.is_empty(): item_name = str(obj["label"])
 			var inventory: Array = state.get("items", [])
@@ -905,11 +1010,14 @@ func _interact(id: String) -> void:
 		"go_to_room":
 			var destination := str(obj.get("destination_room", ""))
 			if SharedData.room_names().has(destination):
+				_sound("Door Opened")
 				_change_room(destination)
 				play_dialogue.text = message if not message.is_empty() else "You entered " + destination + "."
 				return
+			_sound("Door Locked")
 			status.text = "Choose a valid Destination Room in Edit Mode."
 		"win_game":
+			_sound("Victory")
 			won = true
 			status.text = message if not message.is_empty() else "You escaped!"
 			status.text += "  YOU WIN!"
@@ -917,8 +1025,10 @@ func _interact(id: String) -> void:
 			var required := str(obj.get("required", ""))
 			var inventory: Array = state.get("items", [])
 			if not required.is_empty() and not inventory.has(required):
+				_sound("Door Locked")
 				status.text = "Locked. You need: " + required
 			else:
+				_sound("Door Opened")
 				# Consume the required item only when the unlock succeeds.
 				if not required.is_empty():
 					inventory.erase(required)
@@ -929,6 +1039,7 @@ func _interact(id: String) -> void:
 					_change_room(destination)
 					play_dialogue.text = message if not message.is_empty() else "Door unlocked. Entered " + destination + "."
 					return
+				_sound("Victory")
 				won = true
 				status.text = message if not message.is_empty() else "Unlocked!"
 				status.text += "  YOU WIN!"
@@ -1001,8 +1112,10 @@ func _process(delta: float) -> void:
 		player_pos = player_pos.clamp(Vector2(20,20),Vector2(940,520))
 		game_time += delta
 		if Input.is_key_pressed(KEY_SPACE) and fmod(game_time,0.17) < delta:
+			_sound("Player Shooting")
 			shots.append(player_pos)
 		if fmod(game_time,0.8) < delta:
+			_sound("Boss Shooting")
 			enemy_shots.append(Vector2(480 + sin(game_time) * 200.0,100))
 		for i in range(shots.size()-1,-1,-1):
 			shots[i].y -= 420.0 * delta
@@ -1017,11 +1130,14 @@ func _process(delta: float) -> void:
 				enemy_shots.remove_at(i)
 			elif enemy_shots[i].distance_to(player_pos) < 24:
 				enemy_shots.remove_at(i)
+				_sound("Damage")
 				lives -= 1
 		if boss_health <= 0:
+			_sound("Victory")
 			won = true
 			status.text = "Boss defeated! YOU WIN!"
 		elif lives <= 0:
+			_sound("Defeat")
 			won = true
 			status.text = "Game over. Click Play / Test to retry."
 		else:

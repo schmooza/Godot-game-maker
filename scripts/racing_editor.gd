@@ -1,4 +1,8 @@
 extends Control
+var optional_audio: Node
+var game_intro: Node
+var _brake_sound_active := false
+var editable_tooltips: Node
 ## Student-facing black-line track editor and timed racing game.
 const CANVAS := Vector2(900, 560)
 const SCORE_PATH := "user://racing_best_times.json"
@@ -78,6 +82,9 @@ var track_file := "user://racing_track.png"
 
 func _ready() -> void:
 	_build()
+	_install_editable_tooltips()
+	_install_optional_audio()
+	_install_game_intro()
 	_load_track_library()
 	_load_track()
 	_load_scores()
@@ -87,6 +94,40 @@ func _ready() -> void:
 	_update_status()
 	set_process(true)
 
+func _install_editable_tooltips() -> void:
+	var toolbar_row: HBoxContainer = find_child("TooltipToolbar",true,false) as HBoxContainer
+	if toolbar_row == null:
+		return
+	editable_tooltips = load("res://scripts/editable_tooltips.gd").new()
+	add_child(editable_tooltips)
+	editable_tooltips.setup(self,toolbar_row,"racing")
+
+func _install_optional_audio() -> void:
+	var sidebar: Node = find_child("TooltipScanSidebar",true,false)
+	if sidebar == null:
+		return
+	# ScrollContainer must have a single content child.
+	if sidebar is ScrollContainer and sidebar.get_child_count() > 0:
+		sidebar = sidebar.get_child(0)
+	optional_audio = load("res://scripts/optional_audio.gd").new()
+	add_child(optional_audio)
+	var sound_events: Array[String] = ["Background Music", "Engine", "Acceleration", "Braking", "Checkpoint", "Lap Complete", "Race Finish"]
+	optional_audio.setup(self,sidebar,"racing",sound_events)
+
+func _install_game_intro() -> void:
+	var sidebar: Node = find_child("TooltipScanSidebar",true,false)
+	if sidebar == null:
+		return
+	if sidebar is ScrollContainer and sidebar.get_child_count() > 0:
+		sidebar = sidebar.get_child(0)
+	game_intro = load("res://scripts/game_intro.gd").new()
+	add_child(game_intro)
+	game_intro.setup(self,sidebar,"racing","2D Car Racing","Drive your car around the track, reach checkpoints and beat your best lap time!")
+
+func _sound(event_name: String) -> void:
+	if optional_audio != null:
+		optional_audio.play(event_name)
+
 func _build() -> void:
 	var root := VBoxContainer.new()
 	add_child(root)
@@ -94,6 +135,7 @@ func _build() -> void:
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var toolbar := HBoxContainer.new()
+	toolbar.name = "TooltipToolbar"
 	root.add_child(toolbar)
 	_button(toolbar, "← Games", func(): get_tree().change_scene_to_file("res://scenes/main.tscn"))
 	_button(toolbar, "Import black-line track", _open_track_dialog)
@@ -111,6 +153,7 @@ func _build() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	content.add_child(scroll)
 	var sidebar := VBoxContainer.new()
+	sidebar.name = "TooltipScanSidebar"
 	sidebar.custom_minimum_size.x = 310
 	scroll.add_child(sidebar)
 	scene_panel = _section(sidebar, "TRACK & GAME SETTINGS", Color("#70c2fa"))
@@ -712,6 +755,8 @@ func _starting_track_angle() -> float:
 
 func _edit_track() -> void:
 	playing = false
+	if optional_audio != null:
+		optional_audio.stop_all()
 	race_mode = false
 	placing_checkpoints = false
 	placing_start = false
@@ -723,11 +768,18 @@ func _edit_track() -> void:
 	_update_status()
 
 func _start() -> void:
+	if game_intro != null:
+		game_intro.show_intro(Callable(self,"_start_actual"))
+	else:
+		_start_actual()
+
+func _start_actual() -> void:
 	if track_points.size() < 100:
 		status.text = "Import a black-line track first."
 		return
 	_reset_car()
 	playing = true
+	_sound("Background Music")
 	race_mode = true
 	placing_checkpoints = false
 	placing_start = false
@@ -789,14 +841,22 @@ func _process(delta: float) -> void:
 	var throttle := Input.is_physical_key_pressed(KEY_W)
 	var braking := Input.is_physical_key_pressed(KEY_S)
 	if throttle and not braking:
+		if car_speed <= 0.0:
+			_sound("Acceleration")
+			_sound("Engine")
 		car_speed = move_toward(car_speed, max_forward_speed, acceleration * delta)
 	elif braking and not throttle:
+		if car_speed > 0.0 and not Input.is_physical_key_pressed(KEY_W):
+			if not _brake_sound_active:
+				_sound("Braking")
+			_brake_sound_active = true
 		# S brakes a moving car, then reverses when stopped.
 		if car_speed > 0.0:
 			car_speed = move_toward(car_speed, 0.0, brake_strength * delta)
 		else:
 			car_speed = move_toward(car_speed, -max_forward_speed * 0.45, acceleration * delta)
 	else:
+		_brake_sound_active = false
 		car_speed = move_toward(car_speed, 0.0, coast_drag * delta)
 	if abs(car_speed) > 5:
 		car_angle += steer * 2.4 * delta * sign(car_speed)
@@ -823,16 +883,21 @@ func _check_lap() -> void:
 	for i in range(targets.size()):
 		if last_checkpoint == i - 1 and car_position.distance_to(targets[i]) < lap_sensor_radius:
 			checkpoints[i] = true
+			_sound("Checkpoint")
 			last_checkpoint = i
 	if last_checkpoint == targets.size() - 1 and car_position.distance_to(_start_position()) < lap_sensor_radius:
 		var lap_time := elapsed - lap_start
 		if lap_time > 2.0:
 			best_lap = min(best_lap, lap_time)
 			lap += 1
+			_sound("Lap Complete")
 			lap_start = elapsed
 			last_checkpoint = -1
 			checkpoints.fill(false)
 			if lap >= total_laps:
+				if optional_audio != null:
+					optional_audio.stop_event("Background Music")
+				_sound("Race Finish")
 				playing = false
 				_record_score(elapsed)
 				_update_score_label()
