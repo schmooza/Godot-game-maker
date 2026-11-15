@@ -1,4 +1,5 @@
 extends Node
+const TrackSave = preload("res://scripts/track_save.gd")
 var marks: Array = []
 var undone: Array = []
 func clear_data() -> void:
@@ -26,12 +27,10 @@ func contains(pos: Vector2) -> bool:
 			wet = not bool(mark["erase"])
 	return wet
 func save_data(path: String) -> void:
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	if f != null:
-		f.store_string(JSON.stringify(marks))
+	TrackSave.write_json(path, marks)
 func load_data(path: String) -> void:
 	clear_data()
 	if FileAccess.file_exists(path):
-		var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+		var data: Variant = TrackSave.read_json(path)
 		if data is Array:
 			marks = data

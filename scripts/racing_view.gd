@@ -46,7 +46,8 @@ func _draw() -> void:
 	if not c.race_mode:
 		if not c.track_points.is_empty():
 			var start: Vector2 = c._start_position()
-			draw_circle(start, 9, Color("#00cfcf"))
+			draw_arc(start, c.start_sensor_radius, 0.0, TAU, 48, Color("#00cfcf", 0.75), 2.0)
+			draw_circle(start, 7, Color("#00cfcf"))
 	# In race mode, replace checkpoint sensors with compact road-direction guides.
 	# These are hints, not the hidden detection areas.
 	if c.race_mode and not c.track_points.is_empty():

@@ -1,4 +1,5 @@
 extends Node
+const TrackSave = preload("res://scripts/track_save.gd")
 var strokes: Array = []
 var redo_strokes: Array = []
 func clear_data() -> void:
@@ -36,12 +37,10 @@ func combined_points(base: Array[Vector2]) -> Array[Vector2]:
 				result.append(a.lerp(b, float(i) / float(steps)))
 	return result
 func save_data(path: String) -> void:
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	if f != null:
-		f.store_string(JSON.stringify(strokes))
+	TrackSave.write_json(path, strokes)
 func load_data(path: String) -> void:
 	clear_data()
 	if FileAccess.file_exists(path):
-		var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+		var data: Variant = TrackSave.read_json(path)
 		if data is Array:
 			strokes = data

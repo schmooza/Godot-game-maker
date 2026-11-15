@@ -1,4 +1,5 @@
 extends Control
+const TrackSave = preload("res://scripts/track_save.gd")
 var optional_audio: Node
 var game_intro: Node
 var _brake_sound_active := false
@@ -11,6 +12,9 @@ const TRACKS_DIR := "user://racing_tracks"
 var track_library: Array = []
 var active_track_id := ""
 var track_selector: OptionButton
+var track_name_input: LineEdit
+var delete_track_dialog: ConfirmationDialog
+var delete_track_id := ""
 var switching_tracks := false
 var track_image: Image
 var track_texture: Texture2D
@@ -23,6 +27,11 @@ var track_painter: Node
 var water_hazards: Node
 var spike_hazards: Node
 var car_jump: Node
+var jump_key := KEY_SPACE
+var jump_key_selector: OptionButton
+var jump_duration := 0.85
+var jump_duration_spin: SpinBox
+var track_data_loaded := false
 var checkpoint_respawn: Node
 var paint_mode := "none"
 var pending_draw_point := Vector2(-1.0, -1.0)
@@ -78,7 +87,9 @@ const ROAD_CELL_SIZE := 24
 var road_spin: SpinBox
 var laps_spin: SpinBox
 var sensor_spin: SpinBox
-var lap_sensor_radius := 100.0
+var start_sensor_spin: SpinBox
+var lap_sensor_radius := 25.0
+var start_sensor_radius := 25.0
 var acceleration_spin: SpinBox
 var max_speed_spin: SpinBox
 var brake_spin: SpinBox
@@ -100,7 +111,19 @@ func _ready() -> void:
 	_install_editable_tooltips()
 	_install_optional_audio()
 	_install_game_intro()
+	_reset_old_tracks_once()
 	_load_track_library()
+	if track_library.is_empty():
+		_new_blank_track()
+	# Restore the active track's PNG, painted layers, hazards and checkpoints.
+	# Previously only the library metadata was loaded on returning to Racing.
+	if not active_track_id.is_empty():
+		var selected_index := 0
+		for i in range(track_library.size()):
+			if str(track_library[i].get("id", "")) == active_track_id:
+				selected_index = i
+				break
+		_select_track(selected_index)
 	_load_track()
 	_load_scores()
 	_load_car_sprite()
@@ -109,6 +132,110 @@ func _ready() -> void:
 	_load_scenery()
 	_update_status()
 	set_process(true)
+
+# One-time migration: start this edition with one blank track.
+# Marker prevents resetting student work on subsequent launches.
+const BLANK_RESET_MARKER := "user://racing_blank_reset_v1.flag"
+
+func _reset_old_tracks_once() -> void:
+	if FileAccess.file_exists(BLANK_RESET_MARKER):
+		return
+	# Remove the old track library, its backups and all track assets.
+	var folder := DirAccess.open(TRACKS_DIR)
+	if folder != null:
+		folder.list_dir_begin()
+		var entry_name := folder.get_next()
+		while not entry_name.is_empty():
+			if not folder.current_is_dir():
+				DirAccess.remove_absolute(TRACKS_DIR + "/" + entry_name)
+			entry_name = folder.get_next()
+		folder.list_dir_end()
+	for legacy_path in [TRACK_LIBRARY_PATH, TRACK_LIBRARY_PATH + ".bak", "user://racing_track.png", SCORE_PATH]:
+		if FileAccess.file_exists(legacy_path):
+			DirAccess.remove_absolute(legacy_path)
+	# Write the marker before creating the first blank track.
+	var marker_file := FileAccess.open(BLANK_RESET_MARKER, FileAccess.WRITE)
+	if marker_file != null:
+		marker_file.store_string("reset complete")
+		marker_file.close()
+
+func _save_track_button() -> void:
+	_save_current_track()
+	status.text = "Track saved."
+
+func _on_jump_key_selected(index: int) -> void:
+	jump_key = jump_key_selector.get_item_id(index)
+	_save_jump_key()
+
+func _save_jump_key() -> void:
+	if active_track_id.is_empty() or switching_tracks:
+		return
+	for i in range(track_library.size()):
+		var entry: Dictionary = track_library[i]
+		if str(entry.get("id", "")) == active_track_id:
+			entry["jump_key"] = jump_key
+			track_library[i] = entry
+			_save_track_library()
+			break
+
+func _restore_jump_key() -> void:
+	jump_key = KEY_SPACE
+	for entry in track_library:
+		if str(entry.get("id", "")) == active_track_id:
+			jump_key = int(entry.get("jump_key", KEY_SPACE))
+			break
+	if jump_key_selector != null:
+		for i in range(jump_key_selector.item_count):
+			if jump_key_selector.get_item_id(i) == jump_key:
+				jump_key_selector.select(i)
+				return
+		jump_key = KEY_SPACE
+		jump_key_selector.select(0)
+
+func _on_jump_duration_changed(value: float) -> void:
+	jump_duration = value
+	if car_jump != null:
+		car_jump.duration = jump_duration
+	_save_jump_duration()
+
+func _save_jump_duration() -> void:
+	if active_track_id.is_empty() or switching_tracks:
+		return
+	for i in range(track_library.size()):
+		var entry: Dictionary = track_library[i]
+		if str(entry.get("id", "")) == active_track_id:
+			entry["jump_duration"] = jump_duration
+			track_library[i] = entry
+			_save_track_library()
+			break
+
+func _restore_jump_duration() -> void:
+	jump_duration = 0.85
+	for entry in track_library:
+		if str(entry.get("id", "")) == active_track_id:
+			jump_duration = clampf(float(entry.get("jump_duration", 0.85)), 0.1, 5.0)
+			break
+	if jump_duration_spin != null:
+		jump_duration_spin.set_value_no_signal(jump_duration)
+	if car_jump != null:
+		car_jump.duration = jump_duration
+
+func _return_to_games() -> void:
+	_save_current_track()
+	get_tree().change_scene_to_file("res://scenes/main.tscn")
+
+func _exit_tree() -> void:
+	# Also save if the user leaves via scene navigation or closes the project.
+	_save_current_track()
+
+func _save_current_track() -> void:
+	if not track_data_loaded or active_track_id.is_empty() or track_painter == null:
+		return
+	DirAccess.make_dir_recursive_absolute(TRACKS_DIR)
+	track_painter.save_data(_drawing_base() + "_road.json")
+	water_hazards.save_data(_drawing_base() + "_water.json")
+	spike_hazards.save_data(_drawing_base() + "_spikes.json")
+	_save_track_library()
 
 func _install_editable_tooltips() -> void:
 	var toolbar_row: HBoxContainer = find_child("TooltipToolbar",true,false) as HBoxContainer
@@ -153,12 +280,13 @@ func _build() -> void:
 	var toolbar := HBoxContainer.new()
 	toolbar.name = "TooltipToolbar"
 	root.add_child(toolbar)
-	_button(toolbar, "← Games", func(): get_tree().change_scene_to_file("res://scenes/main.tscn"))
+	_button(toolbar, "← Games", _return_to_games)
 	_button(toolbar, "Import black-line track", _open_track_dialog)
 	_button(toolbar, "Import car sprite", _open_car_dialog)
 	_button(toolbar, "Import flying car", _open_flying_dialog)
 	_button(toolbar, "Import scenery", _open_scenery_dialog)
 	_button(toolbar, "Edit Track", _edit_track)
+	_button(toolbar, "Save Track", _save_track_button)
 	_button(toolbar, "Play / Test", _start)
 	_button(toolbar, "Restart", _start)
 	var content := HBoxContainer.new()
@@ -181,6 +309,20 @@ func _build() -> void:
 	track_selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	track_selector.item_selected.connect(_select_track)
 	scene_panel.add_child(track_selector)
+	var name_label := Label.new()
+	name_label.text = "Track name"
+	scene_panel.add_child(name_label)
+	track_name_input = LineEdit.new()
+	track_name_input.placeholder_text = "Enter a track name"
+	track_name_input.max_length = 40
+	track_name_input.text_submitted.connect(func(_entered_name: String): _rename_selected_track())
+	scene_panel.add_child(track_name_input)
+	_button(scene_panel, "Rename Track", _rename_selected_track)
+	_button(scene_panel, "Delete Selected Track", _request_delete_track)
+	delete_track_dialog = ConfirmationDialog.new()
+	delete_track_dialog.title = "Delete saved track?"
+	delete_track_dialog.confirmed.connect(_confirm_delete_track)
+	add_child(delete_track_dialog)
 	var painter_section := _section(sidebar, "DRAW TRACK & HAZARDS", Color("#52bde2"))
 	_button(painter_section, "Road: Point to Point", func(): _set_paint_mode("road"))
 	_button(painter_section, "Water: Point to Point", func(): _set_paint_mode("water"))
@@ -239,8 +381,30 @@ func _build() -> void:
 	_button(painter_section, "Redo Drawing", _redo_paint)
 	_button(painter_section, "New Blank Track", _new_blank_track)
 	_button(painter_section, "Save Drawing", _save_drawing)
+	var jump_control_label := Label.new()
+	jump_control_label.text = "Jump control"
+	painter_section.add_child(jump_control_label)
+	jump_key_selector = OptionButton.new()
+	jump_key_selector.add_item("Spacebar", KEY_SPACE)
+	jump_key_selector.add_item("J", KEY_J)
+	jump_key_selector.add_item("Shift", KEY_SHIFT)
+	jump_key_selector.add_item("E", KEY_E)
+	jump_key_selector.add_item("F", KEY_F)
+	jump_key_selector.item_selected.connect(_on_jump_key_selected)
+	painter_section.add_child(jump_key_selector)
+	var duration_label := Label.new()
+	duration_label.text = "Jump duration (seconds)"
+	painter_section.add_child(duration_label)
+	jump_duration_spin = SpinBox.new()
+	jump_duration_spin.min_value = 0.1
+	jump_duration_spin.max_value = 5.0
+	jump_duration_spin.step = 0.05
+	jump_duration_spin.value = jump_duration
+	jump_duration_spin.tooltip_text = "How long the car stays airborne. Does not change speed."
+	jump_duration_spin.value_changed.connect(_on_jump_duration_changed)
+	painter_section.add_child(jump_duration_spin)
 	var jump_hint := Label.new()
-	jump_hint.text = "SPACE = jump over water or raised spikes. Set spike up/down durations above. Hitting raised spikes returns you to the last checkpoint. Import a flying car PNG to change its image in mid-air."
+	jump_hint.text = "Press the selected Jump key to cross water or raised spikes. Set spike up/down durations above. Hitting raised spikes returns you to the last checkpoint. Import a flying car PNG to change its image in mid-air."
 	jump_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	painter_section.add_child(jump_hint)
 	var instructions := Label.new()
@@ -266,16 +430,29 @@ func _build() -> void:
 	laps_spin.value_changed.connect(func(v: float): total_laps = int(v); _save_config(); _update_status())
 	scene_panel.add_child(laps_spin)
 	var sensor_label := Label.new()
-	sensor_label.text = "Lap sensor radius (pixels)"
+	sensor_label.text = "Checkpoint radius (pixels)"
 	scene_panel.add_child(sensor_label)
 	sensor_spin = SpinBox.new()
-	sensor_spin.min_value = 30
-	sensor_spin.max_value = 200
-	sensor_spin.step = 5
+	sensor_spin.min_value = 10
+	sensor_spin.max_value = 100
+	sensor_spin.step = 1
+	sensor_spin.rounded = true
 	sensor_spin.value = lap_sensor_radius
-	sensor_spin.tooltip_text = "Detection radius for checkpoints and the finish line. Saved separately for each track."
+	sensor_spin.tooltip_text = "Checkpoint detection radius. Saved per track."
 	sensor_spin.value_changed.connect(_on_sensor_radius_changed)
 	scene_panel.add_child(sensor_spin)
+	var start_sensor_label := Label.new()
+	start_sensor_label.text = "Start / finish radius (pixels)"
+	scene_panel.add_child(start_sensor_label)
+	start_sensor_spin = SpinBox.new()
+	start_sensor_spin.min_value = 10
+	start_sensor_spin.max_value = 100
+	start_sensor_spin.step = 1
+	start_sensor_spin.rounded = true
+	start_sensor_spin.value = start_sensor_radius
+	start_sensor_spin.tooltip_text = "Start / finish detection radius. Saved per track."
+	start_sensor_spin.value_changed.connect(_on_start_sensor_radius_changed)
+	scene_panel.add_child(start_sensor_spin)
 	var sprite_size_label := Label.new()
 	sprite_size_label.text = "Car sprite width (pixels)"
 	scene_panel.add_child(sprite_size_label)
@@ -611,11 +788,81 @@ func _section(parent: Node, title: String, accent: Color) -> VBoxContainer:
 func _button(parent: Node, caption: String, action: Callable) -> void:
 	var button := Button.new()
 	button.text = caption
+	# Godot activates focused Buttons with Space. Keep racing controls
+	# independent of toolbar focus so Space remains the jump key.
+	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(action)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(button)
 
+func _request_delete_track() -> void:
+	if active_track_id.is_empty():
+		status.text = "No track selected."
+		return
+	if track_library.size() <= 1:
+		status.text = "Keep at least one track. Create another before deleting this one."
+		return
+	var selected_name := active_track_id
+	for entry in track_library:
+		if str(entry.get("id", "")) == active_track_id:
+			selected_name = str(entry.get("name", active_track_id))
+			break
+	delete_track_id = active_track_id
+	delete_track_dialog.dialog_text = "Permanently delete '%s' and its saved drawings, hazards and records? This cannot be undone." % selected_name
+	delete_track_dialog.popup_centered()
+
+func _confirm_delete_track() -> void:
+	if delete_track_id.is_empty() or track_library.size() <= 1:
+		return
+	var removed_id := delete_track_id
+	delete_track_id = ""
+	var index := -1
+	for i in range(track_library.size()):
+		if str(track_library[i].get("id", "")) == removed_id:
+			index = i
+			break
+	if index < 0:
+		return
+	# Never save a deleted track back into its old files during selection.
+	track_data_loaded = false
+	track_library.remove_at(index)
+	for suffix: String in [".png", "_road.json", "_water.json", "_spikes.json", "_scenery.png", "_scores.json", "_scores.json.last", "_scores.json.lap"]:
+		var file_path: String = str(TRACKS_DIR) + "/" + removed_id + suffix
+		if FileAccess.file_exists(file_path):
+			DirAccess.remove_absolute(file_path)
+		var backup_path: String = file_path + ".bak"
+		if FileAccess.file_exists(backup_path):
+			DirAccess.remove_absolute(backup_path)
+	if track_library.is_empty():
+		active_track_id = ""
+		track_file = "user://racing_track.png"
+		track_points.clear()
+		road_cells.clear()
+		track_painter.clear_data()
+		water_hazards.clear_data()
+		spike_hazards.clear_data()
+		_refresh_track_selector()
+		_save_track_library()
+		track_view.queue_redraw()
+		status.text = "Track deleted. Create or import a new track."
+	else:
+		active_track_id = ""
+		_refresh_track_selector()
+		_select_track(0)
+		_refresh_track_selector()
+		status.text = "Track deleted. %d of 5 slots used." % track_library.size()
+
+const MAX_SAVED_TRACKS := 5
+
+func _can_create_track() -> bool:
+	if track_library.size() >= MAX_SAVED_TRACKS:
+		status.text = "5 tracks saved (maximum). Select an existing track to edit."
+		return false
+	return true
+
 func _import_track(path: String) -> void:
+	if not _can_create_track():
+		return
 	var img := Image.new()
 	if img.load(path) != OK:
 		status.text = "Could not load PNG."
@@ -677,7 +924,7 @@ func _scenery_path() -> String:
 func _load_track_library() -> void:
 	track_library.clear()
 	if FileAccess.file_exists(TRACK_LIBRARY_PATH):
-		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TRACK_LIBRARY_PATH))
+		var saved: Variant = TrackSave.read_json(TRACK_LIBRARY_PATH)
 		if saved is Dictionary:
 			var saved_tracks: Variant = saved.get("tracks", [])
 			if saved_tracks is Array:
@@ -696,57 +943,98 @@ func _load_track_library() -> void:
 		active_track_id = str(track_library[0].get("id", ""))
 	track_file = TRACKS_DIR + "/" + active_track_id + ".png" if not active_track_id.is_empty() else "user://racing_track.png"
 	_refresh_track_selector()
+	_restore_jump_key()
+	_restore_jump_duration()
 	_restore_sensor_radius()
 	_restore_checkpoints()
 	_restore_start_position()
 
 func _save_track_library() -> void:
-	var file := FileAccess.open(TRACK_LIBRARY_PATH, FileAccess.WRITE)
-	if file != null:
-		file.store_string(JSON.stringify({"active": active_track_id, "tracks": track_library}))
+	TrackSave.write_json(TRACK_LIBRARY_PATH, {"active": active_track_id, "tracks": track_library})
+
+func _rename_selected_track() -> void:
+	if active_track_id.is_empty() or track_name_input == null:
+		return
+	var new_name: String = track_name_input.text.strip_edges()
+	if new_name.is_empty():
+		status.text = "Enter a track name first."
+		return
+	for i in range(track_library.size()):
+		var entry: Dictionary = track_library[i]
+		if str(entry.get("id", "")) == active_track_id:
+			entry["name"] = new_name
+			track_library[i] = entry
+			_save_track_library()
+			_refresh_track_selector()
+			status.text = "Track renamed to: " + new_name
+			return
 
 func _refresh_track_selector() -> void:
 	if track_selector == null:
 		return
 	switching_tracks = true
 	track_selector.clear()
+	if track_name_input != null:
+		track_name_input.text = ""
 	for i in range(track_library.size()):
 		var item: Dictionary = track_library[i]
 		track_selector.add_item(str(item.get("name", "Track " + str(i + 1))))
 		if str(item.get("id", "")) == active_track_id:
 			track_selector.select(i)
+			if track_name_input != null:
+				track_name_input.text = str(item.get("name", "Track " + str(i + 1)))
 	switching_tracks = false
 
 func _on_sensor_radius_changed(value: float) -> void:
 	lap_sensor_radius = value
+	_save_sensor_radii()
+	track_view.queue_redraw()
+
+func _on_start_sensor_radius_changed(value: float) -> void:
+	start_sensor_radius = value
+	_save_sensor_radii()
+	track_view.queue_redraw()
+
+func _save_sensor_radii() -> void:
 	if switching_tracks or active_track_id.is_empty():
 		return
 	for i in range(track_library.size()):
 		var entry: Dictionary = track_library[i]
 		if str(entry.get("id", "")) == active_track_id:
 			entry["lap_sensor_radius"] = lap_sensor_radius
+			entry["start_sensor_radius"] = start_sensor_radius
 			track_library[i] = entry
 			_save_track_library()
 			break
 
 func _restore_sensor_radius() -> void:
-	var radius := 100.0
+	var checkpoint_radius := 25.0
+	var finish_radius := 25.0
 	for entry in track_library:
 		if str(entry.get("id", "")) == active_track_id:
-			radius = float(entry.get("lap_sensor_radius", 100.0))
+			checkpoint_radius = float(entry.get("lap_sensor_radius", 25.0))
+			finish_radius = float(entry.get("start_sensor_radius", 25.0))
 			break
-	lap_sensor_radius = clampf(radius, 30.0, 200.0)
-	# Avoid overwriting the stored value while switching tracks.
+	lap_sensor_radius = clampf(checkpoint_radius, 10.0, 100.0)
+	start_sensor_radius = clampf(finish_radius, 10.0, 100.0)
 	switching_tracks = true
 	sensor_spin.value = lap_sensor_radius
+	start_sensor_spin.value = start_sensor_radius
 	switching_tracks = false
 
 func _select_track(index: int) -> void:
 	if switching_tracks or index < 0 or index >= track_library.size():
 		return
+	# Save edits to the previous track before switching.
+	_save_current_track()
 	active_track_id = str(track_library[index].get("id", ""))
+	if track_name_input != null:
+		track_name_input.text = str(track_library[index].get("name", ""))
+	track_image = null
 	track_file = TRACKS_DIR + "/" + active_track_id + ".png"
 	_save_track_library()
+	_restore_jump_key()
+	_restore_jump_duration()
 	_restore_sensor_radius()
 	_restore_checkpoints()
 	_restore_start_position()
@@ -773,6 +1061,7 @@ func _select_track(index: int) -> void:
 	_load_scenery()
 	_load_drawing_layers()
 	_refresh_painted_road()
+	track_data_loaded = true
 	_load_scores()
 	_reset_car()
 	_update_status()
@@ -893,6 +1182,7 @@ func _install_racing_modules() -> void:
 	water_hazards = load("res://scripts/water_hazards.gd").new()
 	spike_hazards = load("res://scripts/spike_hazards.gd").new()
 	car_jump = load("res://scripts/car_jump.gd").new()
+	car_jump.duration = jump_duration
 	checkpoint_respawn = load("res://scripts/checkpoint_respawn.gd").new()
 	for module in [track_painter, water_hazards, spike_hazards, car_jump, checkpoint_respawn]:
 		add_child(module)
@@ -988,10 +1278,14 @@ func _base_road_points() -> Array[Vector2]:
 func _refresh_painted_road() -> void:
 	track_points = track_painter.combined_points(_base_road_points())
 	_build_road_cells()
-	_save_drawing()
+	if track_data_loaded:
+		_save_drawing()
 	track_view.queue_redraw()
 
 func _new_blank_track() -> void:
+	if not _can_create_track():
+		return
+	_save_current_track()
 	DirAccess.make_dir_recursive_absolute(TRACKS_DIR)
 	active_track_id = str(Time.get_ticks_usec())
 	track_file = TRACKS_DIR + "/" + active_track_id + ".png"
@@ -1014,6 +1308,8 @@ func _new_blank_track() -> void:
 	status.text = "New track. Click points to draw road segments, then place checkpoints."
 
 func _start_actual() -> void:
+	# Save the edited track before beginning a play test.
+	_save_current_track()
 	# Exit drawing mode before racing so the map receives game input.
 	paint_mode = "none"
 	pending_draw_point = Vector2(-1.0, -1.0)
@@ -1023,6 +1319,10 @@ func _start_actual() -> void:
 	_reset_car()
 	car_jump.reset()
 	playing = true
+	# Clear focus from any editor widget (including SpinBoxes) before driving.
+	var focused_control := get_viewport().gui_get_focus_owner()
+	if focused_control != null:
+		focused_control.release_focus()
 	_sound("Background Music")
 	race_mode = true
 	placing_checkpoints = false
@@ -1123,7 +1423,7 @@ func _process(delta: float) -> void:
 	if abs(car_speed) > 5:
 		car_angle += steer * 2.4 * delta * sign(car_speed)
 	var was_airborne: bool = car_jump.airborne()
-	car_jump.tick(delta, Input.is_physical_key_pressed(KEY_SPACE))
+	car_jump.tick(delta, Input.is_physical_key_pressed(jump_key))
 	var next := car_position + Vector2.UP.rotated(car_angle) * car_speed * delta
 	# On landing, the car must be back on a road and clear of water.
 	# Otherwise it respawns rather than becoming stranded off-track.
@@ -1165,7 +1465,7 @@ func _check_lap() -> void:
 			_sound("Checkpoint")
 			last_checkpoint = i
 			checkpoint_respawn.remember(_nearest_road_point(targets[i]), car_angle)
-	if last_checkpoint == targets.size() - 1 and car_position.distance_to(_start_position()) < lap_sensor_radius:
+	if last_checkpoint == targets.size() - 1 and car_position.distance_to(_start_position()) < start_sensor_radius:
 		var lap_time := elapsed - lap_start
 		if lap_time > 2.0:
 			best_lap = min(best_lap, lap_time)
@@ -1336,7 +1636,7 @@ func _add_checkpoint_at(map_position: Vector2) -> void:
 	var snapped := _nearest_track(map_position)
 	# Avoid overlapping sensors, which would allow checkpoint skipping.
 	var min_gap: float = lap_sensor_radius * 2.1
-	if snapped.distance_to(_start_position()) < min_gap:
+	if snapped.distance_to(_start_position()) < lap_sensor_radius + start_sensor_radius + 5.0:
 		status.text = "Checkpoint too close to the finish/start sensor."
 		return
 	for other in custom_checkpoints:

@@ -1,4 +1,5 @@
 extends Node
+const TrackSave = preload("res://scripts/track_save.gd")
 ## Independent, per-track retractable spike layer.
 ## Timing is configurable and stored separately for each track.
 var up_seconds := 2.0
@@ -51,15 +52,12 @@ func danger_at(pos: Vector2) -> bool:
     return on_spikes
 
 func save_data(path: String) -> void:
-    var file := FileAccess.open(path, FileAccess.WRITE)
-    if file != null:
-        file.store_string(JSON.stringify({"marks": marks, "up_seconds": up_seconds, "down_seconds": down_seconds}))
-
+    TrackSave.write_json(path, {"marks": marks, "up_seconds": up_seconds, "down_seconds": down_seconds})
 func load_data(path: String) -> void:
     clear_data()
     set_timing(2.0, 3.0)
     if FileAccess.file_exists(path):
-        var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+        var data: Variant = TrackSave.read_json(path)
         if data is Array:
             marks = data # Legacy spike drawings
         elif data is Dictionary:
