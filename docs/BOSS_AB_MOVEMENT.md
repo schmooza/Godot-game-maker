@@ -1,0 +1,2 @@
+Boss movement editor: Select wave, drag A (start) and B (destination) on the miniature arena map. Choose travel speed and behavior at B: stop, return to A repeatedly, or restart at A repeatedly. Boss fires its selected wave continuously while moving. When wave duration ends, the next wave starts at its own A point. Position is saved with the wave. No PNG required.
+\nFULL ARENA UPDATE: A and B can be dragged across the entire arena. Their positions are constrained only by the configured boss sprite radius so the boss stays visible.\n
