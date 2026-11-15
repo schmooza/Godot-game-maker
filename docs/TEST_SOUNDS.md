@@ -1,0 +1,1 @@
+Choose a sound event in Sound & Music, then click Use Beep or Use Bop. The sample is assigned to that event and played immediately. Preview plays it again. Samples are bundled with the Godot project under assets/test_sounds/. You can replace either sample by importing your own WAV, MP3, or OGG.
