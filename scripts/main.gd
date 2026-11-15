@@ -3,7 +3,7 @@ extends Control
 const MODES := [
 	{"id":"adventure","name":"Adventure","colour":"#f7dc78"},
 	{"id":"racing","name":"2D Car Racing","colour":"#a9d8f2"},
-	{"id":"boss","name":"Bullet Hell Boss","colour":"#f1b0bc"}
+	{"id":"boss","name":"Boss Fight","colour":"#f1b0bc"}
 ]
 var transfer: Node
 

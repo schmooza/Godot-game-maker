@@ -58,6 +58,8 @@ var movement_returning := false
 var selected_wave := 0
 var wave_canvas: Control
 var tooltip_mode := false
+var tooltip_overlays: Dictionary = {}
+var tooltip_toggle: CheckButton
 var tooltip_targets: Dictionary = {}
 var tooltip_defaults: Dictionary = {}
 var tooltip_custom: Dictionary = {}
@@ -79,6 +81,7 @@ func _ready() -> void:
 	_build()
 	_install_optional_audio()
 	_install_game_intro()
+	_register_extra_tooltips()
 	_reset()
 	set_process(true)
 
@@ -197,6 +200,7 @@ func _build() -> void:
 	var tip_toggle := CheckButton.new()
 	tip_toggle.text = "Edit Tooltips"
 	tip_toggle.focus_mode = Control.FOCUS_NONE
+	tooltip_toggle = tip_toggle
 	tip_toggle.toggled.connect(_toggle_tooltips)
 	bar.add_child(tip_toggle)
 	# Keep this switch operable in tooltip-edit mode; do not register its click as an editable item.
@@ -597,11 +601,51 @@ func _register_tooltip(control: Control, title: String, default_text: String) ->
 	tooltip_defaults[key] = default_text
 	tooltip_targets[control] = key
 	control.tooltip_text = str(tooltip_custom.get(key,default_text))
-	control.gui_input.connect(_tooltip_click.bind(control))
+	# A transparent overlay captures clicks before buttons or sliders act.
+	# It is only visible in tooltip-edit mode.
+	if control is BaseButton or control is Range or control is LineEdit or control is TextEdit:
+		_add_tooltip_overlay(control)
+
+func _add_tooltip_overlay(control: Control) -> void:
+	if tooltip_overlays.has(control):
+		return
+	var overlay := Control.new()
+	overlay.name = "TooltipEditOverlay"
+	overlay.set_meta("tooltip_edit_overlay",true)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	control.add_child(overlay)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.visible = tooltip_mode
+	overlay.gui_input.connect(_tooltip_click.bind(control))
+	tooltip_overlays[control] = overlay
+
+func _register_extra_tooltips() -> void:
+	# Audio and intro modules are created after the original Boss controls.
+	# Include their buttons and settings in the same editable system.
+	for module_root in [optional_audio,game_intro]:
+		if module_root != null:
+			_scan_tooltip_controls(module_root)
+
+func _scan_tooltip_controls(node: Node) -> void:
+	for child in node.get_children():
+		if child is Control:
+			var control: Control = child
+			if control.has_meta("tooltip_edit_overlay"):
+				continue
+			if control is BaseButton or control is Range or control is LineEdit or control is TextEdit:
+				if not tooltip_targets.has(control):
+					var key := "Extra / " + str(control.name) + " / " + str(tooltip_targets.size())
+					var label_text := control.tooltip_text
+					if control is BaseButton:
+						label_text = (control as BaseButton).text
+					elif control is LineEdit:
+						label_text = (control as LineEdit).placeholder_text
+					if label_text.is_empty():
+						label_text = "Change this setting."
+					_register_tooltip(control,key,label_text)
+		_scan_tooltip_controls(child)
 
 func _tooltip_click(event: InputEvent, control: Control) -> void:
-	if control is BaseButton and (control as BaseButton).text == "Edit Tooltips":
-		return
 	if not tooltip_mode or not (event is InputEventMouseButton):
 		return
 	if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
@@ -611,11 +655,20 @@ func _tooltip_click(event: InputEvent, control: Control) -> void:
 		return
 	tooltip_edit.text = str(tooltip_custom.get(tooltip_target_id,tooltip_defaults.get(tooltip_target_id,"")))
 	tooltip_dialog.popup_centered()
-	control.accept_event()
+	var overlay: Control = tooltip_overlays.get(control)
+	if overlay != null:
+		overlay.accept_event()
 
 func _toggle_tooltips(enabled: bool) -> void:
 	tooltip_mode = enabled
-	status.text = "TOOLTIP EDIT MODE: click a menu item to edit its help text." if enabled else "Tooltips saved. Hover over menu items to read them."
+	if tooltip_toggle != null:
+		tooltip_toggle.text = "Done Editing Tooltips" if enabled else "Edit Tooltips"
+	if enabled:
+		_register_extra_tooltips()
+	for control in tooltip_overlays.keys():
+		if is_instance_valid(control) and is_instance_valid(tooltip_overlays[control]):
+			(tooltip_overlays[control] as Control).visible = enabled
+	status.text = "TOOLTIP EDIT MODE: click a setting to edit its help text." if enabled else "Tooltips saved. Hover over menu items to read them."
 
 func _save_current_tooltip() -> void:
 	if tooltip_target_id.is_empty():
