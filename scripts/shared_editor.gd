@@ -79,6 +79,7 @@ var appearance_inputs: Dictionary = {}
 var inventory_panel: PanelContainer
 var room_picker: OptionButton
 var room_name_input: LineEdit
+var room_intro_edit: TextEdit
 var destination_picker: OptionButton
 var room_states: Dictionary = {}
 var shared_inventory: Array = []
@@ -343,6 +344,16 @@ func _build() -> void:
 	room_name_input.placeholder_text = "New room name (e.g. Room 2)"
 	left.add_child(room_name_input)
 	_button(left, "Add Room", _add_room)
+	var intro_heading := Label.new()
+	intro_heading.text = "ROOM INTRODUCTION DIALOGUE  |  Shown when entering this room"
+	intro_heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	left.add_child(intro_heading)
+	room_intro_edit = TextEdit.new()
+	room_intro_edit.custom_minimum_size = Vector2(0, 90)
+	room_intro_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	room_intro_edit.placeholder_text = "Write what the player sees on entering this room. Leave blank for no introduction."
+	room_intro_edit.text_changed.connect(_room_intro_changed)
+	left.add_child(room_intro_edit)
 	var instruction := Label.new()
 	instruction.text = "SCENE EDITOR\nDrag objects in the room.\nSelect an object to edit it.\nImport images or add an object.\nSave, then Play / Test."
 	left.add_child(instruction)
@@ -717,6 +728,16 @@ func _refresh_room_controls() -> void:
 		destination_picker.add_item(str(room))
 	room_picker.select(rooms.find(SharedData.active_room))
 
+func _room_intro_changed() -> void:
+	if testing: return
+	SharedData.current_scene()["room_intro"] = room_intro_edit.text
+
+func _sync_room_intro() -> void:
+	if room_intro_edit == null: return
+	room_intro_edit.set_block_signals(true)
+	room_intro_edit.text = str(SharedData.current_scene().get("room_intro", ""))
+	room_intro_edit.set_block_signals(false)
+
 func _choose_room(index: int) -> void:
 	if testing or SharedData.mode != "adventure": return
 	var rooms := SharedData.room_names()
@@ -841,6 +862,7 @@ func _rebuild() -> void:
 	if editable_tooltips != null:
 		editable_tooltips.call_deferred("refresh")
 	_refresh_room_controls()
+	_sync_room_intro()
 	_sync_appearance_inputs()
 	_apply_appearance()
 	start_hp_edit.set_block_signals(true)
@@ -920,7 +942,8 @@ func _rebuild() -> void:
 	viewport_holder.size_flags_stretch_ratio = 2.0 if testing else 1.0
 	status.visible = not testing
 	if testing:
-		status.text = "TEST: " + {"adventure":"Find the key and unlock the door.","racing":"Use ← → to dodge obstacles. Complete 3 laps.","boss":"Move with arrow keys. Shoot with Space."}[SharedData.mode]
+		# Student-authored, per-room introduction; never prescribe a puzzle solution.
+		status.text = str(SharedData.current_scene().get("room_intro", ""))
 		play_dialogue.text = status.text
 	else:
 		status.text = "EDIT: Drag objects on the scene. Save your layout before testing."
